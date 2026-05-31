@@ -13,7 +13,7 @@ import shlex
 
 from discord.ext import commands
 
-from .. import config, discordutil, events, formatting as fmt, gameday, lookups, money, tick
+from .. import config, discordutil, emojis, events, formatting as fmt, gameday, lookups, money, tick
 from ..discordutil import parse_amount
 from ..errors import BadInput
 from ..scheduler import render_tick_report
@@ -62,7 +62,7 @@ class AdminCog(commands.Cog, name="Manager"):
 
         real_drop = (1 - index_before / index_after) if index_after > 0 else 0.0
         warning = (
-            f"⚠️ This will raise the pool by **{fmt.fmt(nuggies)}** nug and push "
+            f"{emojis.MONEY_PRINTER} ⚠️ This will raise the pool by **{fmt.fmt(nuggies)}** nug and push "
             f"inflation from **{index_before:.3f} → {index_after:.3f}**. "
             f"Every real balance on the server drops ~{real_drop * 100:.1f}%. "
             f"React ✅ within 60s to confirm."
@@ -79,7 +79,7 @@ class AdminCog(commands.Cog, name="Manager"):
 
         await ctx.send(
             embed=discordutil.embed(
-                "💸 Money printed",
+                f"{emojis.MONEY_PRINTER} Money printed",
                 f"Printed **{fmt.abbr(nuggies)}** nug. "
                 f"Pool: **{fmt.fmt(pool_after)}** nug. "
                 f"Inflation index: **{new_index:.3f}**.\n"
@@ -101,7 +101,7 @@ class AdminCog(commands.Cog, name="Manager"):
             new_rate = state.tax_rate
         await ctx.send(
             embed=discordutil.embed(
-                "🧾 Tax rate updated",
+                f"{emojis.TREASURY_POOL} Tax rate updated",
                 f"Wage + dividend tax is now **{new_rate * 100:.1f}%**. "
                 f"Every payout from here on withholds at this rate into the pool.",
             )
@@ -121,7 +121,11 @@ class AdminCog(commands.Cog, name="Manager"):
             game_day = state.game_day
             is_open = gameday.is_business_day(game_day)
 
-        status = "📈 market **OPEN**" if is_open else "🌙 market **CLOSED** (prices frozen until Monday)"
+        status = (
+            f"{emojis.STOCK_UP} market **OPEN**"
+            if is_open
+            else "🌙 market **CLOSED** (prices frozen until Monday)"
+        )
         await ctx.send(
             embed=discordutil.embed(
                 "📅 Calendar corrected",
@@ -146,11 +150,14 @@ class AdminCog(commands.Cog, name="Manager"):
             event_blurb = event.blurb
             today = state.weekday
 
-        label = "every industry" if industry == events.MARKET_WIDE else industry.capitalize()
+        if industry == events.MARKET_WIDE:
+            label, ind_emoji = "every industry", emojis.STOCK_DOWN
+        else:
+            label, ind_emoji = industry.capitalize(), emojis.industry(industry)
         await ctx.send(
             embed=discordutil.embed(
-                f"📰 BREAKING — {event_blurb}",
-                f"⚡ **{label} ×{multiplier:g}** for the rest of today "
+                f"{emojis.BREAKING_NEWS} BREAKING — {event_blurb}",
+                f"{ind_emoji} **{label} ×{multiplier:g}** for the rest of today "
                 f"({today.capitalize()}). It hits both production revenue and "
                 f"valuation. Trade accordingly.",
             )

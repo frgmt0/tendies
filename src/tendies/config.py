@@ -89,6 +89,8 @@ INDUSTRIES: tuple[str, ...] = (
     "infrastructure",
     "entertainment",
     "finance",
+    "defense",
+    "consumer",
 )
 
 #: Friendly aliases accepted from users, normalized to a canonical industry.
@@ -116,6 +118,14 @@ INDUSTRY_ALIASES: dict[str, str] = {
     "gaming": "entertainment",
     "bank": "finance",
     "banking": "finance",
+    "military": "defense",
+    "weapons": "defense",
+    "arms": "defense",
+    "aerospace": "defense",
+    "retail": "consumer",
+    "goods": "consumer",
+    "consumer goods": "consumer",
+    "cpg": "consumer",
 }
 
 

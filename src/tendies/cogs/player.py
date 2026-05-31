@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from discord.ext import commands
 
-from .. import discordutil, formatting, lookups
+from .. import discordutil, emojis, formatting, lookups
 from ..discordutil import mention
 from ..services import employment
 
@@ -54,7 +54,7 @@ class PlayerCog(commands.Cog, name="Player"):
             lines.append("No holdings.")
 
         emb = discordutil.embed(
-            f"💰 {ctx.author.display_name}",
+            f"{emojis.NUGGIE} {ctx.author.display_name}",
             "\n".join(lines),
         )
         await ctx.send(embed=emb)
@@ -72,7 +72,7 @@ class PlayerCog(commands.Cog, name="Player"):
         if not listings:
             await ctx.send(
                 embed=discordutil.embed(
-                    "🍗 Open positions",
+                    f"{emojis.HIRING} Open positions",
                     "No open positions right now. Found a company with `$found` "
                     "to make some.",
                 )
@@ -100,7 +100,7 @@ class PlayerCog(commands.Cog, name="Player"):
             )
 
         emb = discordutil.embed(
-            f"🍗 Open positions (page {page}/{total_pages})",
+            f"{emojis.HIRING} Open positions (page {page}/{total_pages})",
             "\n".join(lines),
         )
         await ctx.send(embed=emb)
@@ -120,7 +120,7 @@ class PlayerCog(commands.Cog, name="Player"):
         if result.auto_accepted:
             await ctx.send(
                 embed=discordutil.embed(
-                    f"✅ Hired at {result.company_name}",
+                    f"{emojis.HIRING} Hired at {result.company_name}",
                     f"You're now **{result.title}** at **{result.company_name}** "
                     f"({result.ticker}) — state job, auto-accepted.\n"
                     f"Wage **{formatting.fmt(result.daily_wage)} nug/day**. "
@@ -130,7 +130,7 @@ class PlayerCog(commands.Cog, name="Player"):
         else:
             await ctx.send(
                 embed=discordutil.embed(
-                    "📨 Application filed",
+                    f"{emojis.HIRING} Application filed",
                     f"Applied to **{result.company_name}** ({result.ticker}) — "
                     f"**{result.title}** ({formatting.fmt(result.daily_wage)} "
                     f"nug/day).\nThe owner will review it with "
@@ -151,7 +151,7 @@ class PlayerCog(commands.Cog, name="Player"):
         if result.already:
             await ctx.send(
                 embed=discordutil.embed(
-                    "⏰ Already clocked in",
+                    f"{emojis.CLOCK_IN} Already clocked in",
                     f"You're already clocked in at **{result.company_name}** today. "
                     f"You'll be paid {formatting.fmt(result.daily_wage)} nug at the "
                     f"tick.",
@@ -161,7 +161,7 @@ class PlayerCog(commands.Cog, name="Player"):
 
         await ctx.send(
             embed=discordutil.embed(
-                f"⏰ Clocked in at {result.company_name}",
+                f"{emojis.CLOCK_IN} Clocked in at {result.company_name}",
                 f"You'll be paid **{formatting.fmt(result.daily_wage)} nug** at "
                 f"today's tick and you're contributing to "
                 f"**{result.company_name}**'s production. See you at close.",
@@ -180,7 +180,7 @@ class PlayerCog(commands.Cog, name="Player"):
 
         await ctx.send(
             embed=discordutil.embed(
-                "🕔 Clocked out",
+                f"{emojis.CLOCK_IN} Clocked out",
                 f"You've clocked out of **{company_name}** for today. No production, "
                 f"no wage at the next tick.",
             )

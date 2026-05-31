@@ -19,7 +19,7 @@ import datetime as dt
 
 from discord.ext import commands
 
-from .. import discordutil, events, formatting, gameday, lookups, money, valuation
+from .. import discordutil, emojis, events, formatting, gameday, lookups, money, valuation
 
 
 def _week_monday(day: dt.date) -> dt.date:
@@ -54,10 +54,11 @@ class Market(commands.Cog):
                 if active:
                     active.sort(key=lambda x: x[1], reverse=True)
                     note = "  (" + ", ".join(
-                        f"{ind.capitalize()} ×{mult:g}" for ind, mult in active
+                        f"{emojis.industry(ind)} {ind.capitalize()} ×{mult:g}"
+                        for ind, mult in active
                     ) + " today)"
 
-        header = f"📊 The Nuggie Exchange — {weekday}{note}"
+        header = f"{emojis.STOCK_UP} The Nuggie Exchange — {weekday}{note}"
 
         if not open_market:
             body = (
@@ -107,7 +108,7 @@ class Market(commands.Cog):
         if not entries:
             await ctx.send(
                 embed=discordutil.embed(
-                    "🏆 Richest tycoons (real net worth)",
+                    f"{emojis.LEADERBOARD} Richest tycoons (real net worth)",
                     "Nobody's on the board yet. Clock in and start stacking nuggies.",
                 )
             )
@@ -125,7 +126,7 @@ class Market(commands.Cog):
 
         await ctx.send(
             embed=discordutil.embed(
-                "🏆 Richest tycoons (real net worth)", "\n".join(lines)
+                f"{emojis.LEADERBOARD} Richest tycoons (real net worth)", "\n".join(lines)
             )
         )
 
@@ -165,7 +166,7 @@ class Market(commands.Cog):
                 f"{formatting.fmt(supply)} nug",
             ]
         )
-        await ctx.send(embed=discordutil.embed("🍗 Server Treasury", desc))
+        await ctx.send(embed=discordutil.embed(f"{emojis.TREASURY_POOL} Server Treasury", desc))
 
     # ------------------------------------------------------------------ today
     @commands.command(name="today")

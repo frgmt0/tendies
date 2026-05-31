@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from discord.ext import commands
 
-from .. import discordutil, lookups
+from .. import discordutil, emojis, lookups
 from ..discordutil import parse_amount
 from ..formatting import fmt
 from ..services import acquisitions, investment
@@ -52,7 +52,11 @@ class CapitalCog(commands.Cog, name="Capital"):
             f"Open to accredited investors.\n"
             f"`$invest {result.ticker} <amount>` to take a slice."
         )
-        await ctx.send(embed=discordutil.embed(f"📈 {result.ticker} funding round open", desc))
+        await ctx.send(
+            embed=discordutil.embed(
+                f"{emojis.STOCK_UP} {result.ticker} funding round open", desc
+            )
+        )
 
     # -------------------------------------------------------------------
     # $invest <ticker> <amount>
@@ -77,7 +81,9 @@ class CapitalCog(commands.Cog, name="Capital"):
             f"**{result.ticker}** for {fmt(result.shares)} sh "
             f"(**{result.pct_of_company:.2f}%** of the company).{closed_note}"
         )
-        await ctx.send(embed=discordutil.embed(f"💰 Invested in {result.ticker}", desc))
+        await ctx.send(
+            embed=discordutil.embed(f"{emojis.STOCK_UP} Invested in {result.ticker}", desc)
+        )
 
     # -------------------------------------------------------------------
     # $dividend <ticker> <amount>
@@ -103,7 +109,9 @@ class CapitalCog(commands.Cog, name="Capital"):
                 f"{fmt(p.gross)} (−{fmt(p.tax)} tax) = {fmt(p.net)} nug"
             )
         lines.append(f"Tax → pool: {fmt(result.total_tax)} nug.")
-        await ctx.send(embed=discordutil.embed("💸 Dividend paid", "\n".join(lines)))
+        await ctx.send(
+            embed=discordutil.embed(f"{emojis.DIVIDEND} Dividend paid", "\n".join(lines))
+        )
 
     # -------------------------------------------------------------------
     # $acquire <acquirer> <target> <offer>
@@ -126,7 +134,9 @@ class CapitalCog(commands.Cog, name="Capital"):
             f"{discordutil.mention(result.target_owner_id)}: "
             f"`$accept {result.acquirer_ticker}` or `$decline {result.acquirer_ticker}`."
         )
-        await ctx.send(embed=discordutil.embed("🤝 Acquisition offer", desc))
+        await ctx.send(
+            embed=discordutil.embed(f"{emojis.ACQUISITION} Acquisition offer", desc)
+        )
 
     # -------------------------------------------------------------------
     # $accept <acquirer>
@@ -162,10 +172,12 @@ class CapitalCog(commands.Cog, name="Capital"):
                 f"(re-apply to **{result.acquirer_ticker}** if wanted)."
             )
         lines.append(
-            f"📊 **{result.acquirer_ticker}**'s production base changed. "
+            f"{emojis.STOCK_UP} **{result.acquirer_ticker}**'s production base changed. "
             f"Watch its price at the next tick."
         )
-        await ctx.send(embed=discordutil.embed("🤝 Deal closed", "\n".join(lines)))
+        await ctx.send(
+            embed=discordutil.embed(f"{emojis.ACQUISITION} Deal closed", "\n".join(lines))
+        )
 
     # -------------------------------------------------------------------
     # $decline <acquirer>

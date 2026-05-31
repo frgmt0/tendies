@@ -110,7 +110,8 @@ Source lives in `src/tendies/`, importable as `tendies.<module>`.
 - `tick.py` — the load-bearing daily tick (`run_tick`) and `is_market_open`.
 - `gameday.py` — business-day / weekend calendar helpers.
 - `formatting.py` — number formatting (commas, K/M/B/T abbreviation, real-terms conversion, percentages).
-- `discordutil.py` — the Discord edge: manager checks, embeds, reaction confirmations, interactive prompts.
+- `discordutil.py` — the Discord edge: manager checks, embeds, reaction confirmations, interactive prompts, and the shared amount parser.
+- `emojis.py` — the server's custom emoji glyphs (currency, industries, events, etc.) in one place; cogs reference names, not raw IDs.
 - `db.py` — async SQLAlchemy engine + session context manager.
 - `bot.py` — `TendiesBot`: owns `db`, `settings`, and the scheduler; bootstraps guilds on demand and renders `GameError`s centrally.
 - `scheduler.py` — advances every guild's economy each tick interval and posts the daily-close announcement.

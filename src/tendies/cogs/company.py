@@ -12,7 +12,7 @@ import re
 
 from discord.ext import commands
 
-from .. import discordutil, lookups
+from .. import discordutil, emojis, lookups
 from ..discordutil import mention
 from ..errors import BadInput, NotFound
 from ..formatting import abbr, fmt, shares_pct
@@ -29,6 +29,8 @@ _INDUSTRY_LABELS = {
     "infrastructure": "Infrastructure",
     "entertainment": "Entertainment",
     "finance": "Finance",
+    "defense": "Defense",
+    "consumer": "Consumer",
 }
 
 #: a/b/c… index letters for the applicant list.
@@ -96,7 +98,9 @@ class CompanyCog(commands.Cog, name="Companies"):
             )
             await ctx.send(
                 embed=discordutil.embed(
-                    f"🏭 Founded {co.name} ({co.ticker}) in {label}.", desc
+                    f"{emojis.FACTORY} Founded {co.name} ({co.ticker}) in "
+                    f"{emojis.industry(co.industry)} {label}.",
+                    desc,
                 )
             )
 
@@ -126,7 +130,10 @@ class CompanyCog(commands.Cog, name="Companies"):
                 else:
                     lines.append("")
                     lines.append("No open jobs right now.")
-                title = f"🏛️ {co.name} ({co.ticker}) — {label}"
+                title = (
+                    f"{emojis.TREASURY_POOL} {co.name} ({co.ticker}) — "
+                    f"{emojis.industry(co.industry)} {label} · state-owned"
+                )
             else:
                 lines.append(f"Owner: {mention(co.owner_id)}")
                 lines.append(f"Treasury: {fmt(co.treasury)} nug")
@@ -144,7 +151,10 @@ class CompanyCog(commands.Cog, name="Companies"):
                     f"Valuation (real): {fmt(val.real_value)} nug "
                     f"→ share price {val.share_price:,.2f} nug"
                 )
-                title = f"🏭 {co.name} ({co.ticker}) — {label}"
+                title = (
+                    f"{emojis.FACTORY} {co.name} ({co.ticker}) — "
+                    f"{emojis.industry(co.industry)} {label}"
+                )
 
             await ctx.send(embed=discordutil.embed(title, "\n".join(lines)))
 
@@ -214,7 +224,7 @@ class CompanyCog(commands.Cog, name="Companies"):
             equity_clause = ""
         await ctx.send(
             embed=discordutil.embed(
-                f"📋 Posted: {display_ticker} — {job_title} — "
+                f"{emojis.HIRING} Posted: {display_ticker} — {job_title} — "
                 f"{fmt(daily_wage)} nug/day{equity_clause}.",
                 f"Job ID {job_id}. Applicants will show in `$applicants {display_ticker}`.",
             )
@@ -238,7 +248,7 @@ class CompanyCog(commands.Cog, name="Companies"):
         if not applicants:
             await ctx.send(
                 embed=discordutil.embed(
-                    f"📨 {display_ticker} — applicants",
+                    f"{emojis.HIRING} {display_ticker} — applicants",
                     "No pending applicants yet.",
                 )
             )
@@ -266,7 +276,9 @@ class CompanyCog(commands.Cog, name="Companies"):
             + f"   |   `$fire {display_ticker} @user`"
         )
         await ctx.send(
-            embed=discordutil.embed(f"📨 {display_ticker} — applicants", "\n".join(lines))
+            embed=discordutil.embed(
+                f"{emojis.HIRING} {display_ticker} — applicants", "\n".join(lines)
+            )
         )
 
     # ------------------------------------------------------------------- hire
@@ -299,7 +311,7 @@ class CompanyCog(commands.Cog, name="Companies"):
             equity_clause = ""
         await ctx.send(
             embed=discordutil.embed(
-                "✅ Hired!",
+                f"{emojis.HIRING} Hired!",
                 f"{mention(result.user_id)} hired at {display_ticker}, "
                 f"{fmt(result.daily_wage)} nug/day{equity_clause}.",
             )
@@ -321,7 +333,7 @@ class CompanyCog(commands.Cog, name="Companies"):
             await companies.fire(session, state, ctx.author.id, ticker, target_id)
         await ctx.send(
             embed=discordutil.embed(
-                "👋 Fired.",
+                f"{emojis.FIRED} Fired.",
                 f"{mention(target_id)} no longer works at {display_ticker}. "
                 f"Unvested equity is forfeit; vested shares are theirs to keep.",
             )

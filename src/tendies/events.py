@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import gameday
+from . import emojis, gameday
 from .config import INDUSTRIES, MAX_EVENTS_PER_WEEK
 from .models import Event, ServerState
 
@@ -36,27 +36,32 @@ class EventTemplate:
 
 
 #: Curated flavor pool for random rolls. Multipliers run both directions; the
-#: market-wide crash is rare and brutal.
+#: market-wide crash is rare and brutal. Each event is tagged with its industry's
+#: custom emoji (the market-wide crash with the crash glyph).
 EVENT_TEMPLATES: tuple[EventTemplate, ...] = (
-    EventTemplate("medicine", 2.5, "🧬", "Medicine breakthrough — a blockbuster drug clears trials."),
-    EventTemplate("medicine", 0.6, "💊", "Recall scandal rocks the pharma sector."),
-    EventTemplate("energy", 2.2, "🛢️", "Energy crunch — prices spike at the pump."),
-    EventTemplate("energy", 0.4, "⚡", "Oil glut floods the market. Frackers, condolences."),
-    EventTemplate("tech", 2.4, "💻", "Tech mania — a viral launch lights up the sector."),
-    EventTemplate("tech", 0.5, "🪫", "Tech bubble jitters send valuations tumbling."),
-    EventTemplate("materials", 2.0, "⛏️", "Commodities supercycle — raw materials in hot demand."),
-    EventTemplate("materials", 0.6, "📉", "Mining glut craters materials prices."),
-    EventTemplate("food", 1.8, "🍗", "Viral food trend sends orders through the roof."),
-    EventTemplate("food", 0.6, "🤢", "Foodborne outbreak spooks the food sector."),
-    EventTemplate("logistics", 2.0, "🚚", "Shipping squeeze — freight rates surge."),
-    EventTemplate("logistics", 0.6, "🚧", "Port backlog snarls the logistics sector."),
-    EventTemplate("infrastructure", 1.9, "🏗️", "Infrastructure stimulus package passes."),
-    EventTemplate("infrastructure", 0.6, "🧱", "Budget freeze halts public projects."),
-    EventTemplate("entertainment", 2.3, "🎬", "Blockbuster season — entertainment is booming."),
-    EventTemplate("entertainment", 0.6, "📺", "Streaming wars bruise the entertainment sector."),
-    EventTemplate("finance", 2.1, "💹", "Bull run — finance is printing."),
-    EventTemplate("finance", 0.5, "🏦", "Credit crunch hammers the finance sector."),
-    EventTemplate(MARKET_WIDE, 0.5, "💥", "Market-wide crash — everything is on fire."),
+    EventTemplate("medicine", 2.5, emojis.INDUSTRY_MEDICINE, "Medicine breakthrough — a blockbuster drug clears trials."),
+    EventTemplate("medicine", 0.6, emojis.INDUSTRY_MEDICINE, "Recall scandal rocks the pharma sector."),
+    EventTemplate("energy", 2.2, emojis.INDUSTRY_ENERGY, "Energy crunch — prices spike at the pump."),
+    EventTemplate("energy", 0.4, emojis.INDUSTRY_ENERGY, "Oil glut floods the market. Frackers, condolences."),
+    EventTemplate("tech", 2.4, emojis.INDUSTRY_TECH, "Tech mania — a viral launch lights up the sector."),
+    EventTemplate("tech", 0.5, emojis.INDUSTRY_TECH, "Tech bubble jitters send valuations tumbling."),
+    EventTemplate("materials", 2.0, emojis.INDUSTRY_MATERIALS, "Commodities supercycle — raw materials in hot demand."),
+    EventTemplate("materials", 0.6, emojis.INDUSTRY_MATERIALS, "Mining glut craters materials prices."),
+    EventTemplate("food", 1.8, emojis.INDUSTRY_FOOD, "Viral food trend sends orders through the roof."),
+    EventTemplate("food", 0.6, emojis.INDUSTRY_FOOD, "Foodborne outbreak spooks the food sector."),
+    EventTemplate("logistics", 2.0, emojis.industry("logistics"), "Shipping squeeze — freight rates surge."),
+    EventTemplate("logistics", 0.6, emojis.industry("logistics"), "Port backlog snarls the logistics sector."),
+    EventTemplate("infrastructure", 1.9, emojis.industry("infrastructure"), "Infrastructure stimulus package passes."),
+    EventTemplate("infrastructure", 0.6, emojis.industry("infrastructure"), "Budget freeze halts public projects."),
+    EventTemplate("entertainment", 2.3, emojis.industry("entertainment"), "Blockbuster season — entertainment is booming."),
+    EventTemplate("entertainment", 0.6, emojis.industry("entertainment"), "Streaming wars bruise the entertainment sector."),
+    EventTemplate("finance", 2.1, emojis.INDUSTRY_FINANCE, "Bull run — finance is printing."),
+    EventTemplate("finance", 0.5, emojis.INDUSTRY_FINANCE, "Credit crunch hammers the finance sector."),
+    EventTemplate("defense", 2.2, emojis.INDUSTRY_DEFENSE, "Defense contracts surge — the generals are buying."),
+    EventTemplate("defense", 0.6, emojis.INDUSTRY_DEFENSE, "Peace breaks out; defense budgets get slashed."),
+    EventTemplate("consumer", 1.9, emojis.INDUSTRY_CONSUMER, "Consumer spending spree — shelves empty out."),
+    EventTemplate("consumer", 0.6, emojis.INDUSTRY_CONSUMER, "Consumer confidence craters; wallets snap shut."),
+    EventTemplate(MARKET_WIDE, 0.5, emojis.STOCK_DOWN, "Market-wide crash — everything is on fire."),
 )
 
 

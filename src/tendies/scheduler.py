@@ -14,6 +14,7 @@ import discord
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
+from . import emojis
 from . import formatting as fmt
 from . import gameday, tick
 from .models import ServerState
@@ -115,20 +116,20 @@ def render_tick_report(report: TickReport) -> discord.Embed:
 
     if report.rolled_events:
         embed.add_field(
-            name="📰 This week's roll",
+            name=f"{emojis.BREAKING_NEWS} This week's roll",
             value="\n".join(report.rolled_events),
             inline=False,
         )
     elif report.todays_events:
         embed.add_field(
-            name="📰 Today",
+            name=f"{emojis.BREAKING_NEWS} Today",
             value="\n".join(report.todays_events),
             inline=False,
         )
 
     if report.recession_ratio < 1.0:
         embed.add_field(
-            name="📉 Recession",
+            name=f"{emojis.RECESSION} Recession",
             value=(
                 f"Pool too thin for full output — every company realized "
                 f"**{report.recession_ratio * 100:.0f}%** of production today."
@@ -141,14 +142,19 @@ def render_tick_report(report: TickReport) -> discord.Embed:
     if movers:
         lines = []
         for c in movers[:10]:
-            tag = " ⚠️ insolvent" if c.insolvent and not c.bankrupted else ""
-            tag = " 💀 BANKRUPT" if c.bankrupted else tag
+            tag = f" {emojis.STOCK_DOWN} insolvent" if c.insolvent and not c.bankrupted else ""
+            tag = f" {emojis.BANKRUPTCY} BANKRUPT" if c.bankrupted else tag
             sent = f" ×{c.sentiment:g}" if abs(c.sentiment - 1.0) > 1e-9 else ""
             lines.append(
-                f"**{c.ticker}**{sent} — produced {fmt.abbr(c.realized_revenue)}, "
+                f"{emojis.industry(c.industry)} **{c.ticker}**{sent} — "
+                f"produced {fmt.abbr(c.realized_revenue)}, "
                 f"paid {fmt.abbr(c.payroll_paid)} to {c.workers}{tag}"
             )
-        embed.add_field(name="🏭 Production & payroll", value="\n".join(lines), inline=False)
+        embed.add_field(
+            name=f"{emojis.FACTORY} Production & payroll",
+            value="\n".join(lines),
+            inline=False,
+        )
 
     summary = (
         f"Revenue realized: **{fmt.abbr(report.total_realized_revenue)}** nug\n"
@@ -161,13 +167,13 @@ def render_tick_report(report: TickReport) -> discord.Embed:
 
     if report.bankruptcies:
         embed.add_field(
-            name="💀 Bankruptcies",
+            name=f"{emojis.BANKRUPTCY} Bankruptcies",
             value=", ".join(report.bankruptcies),
             inline=False,
         )
     if report.state_crisis:
         embed.add_field(
-            name="🚨 Treasury crisis",
+            name=f"{emojis.TREASURY_POOL} Treasury crisis",
             value="The pool couldn't cover state payroll. Raise taxes, cut jobs, or print — your move, Managers.",
             inline=False,
         )
