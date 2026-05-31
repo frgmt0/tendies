@@ -1,0 +1,30 @@
+[project]
+name = "tendies"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "frgmt0", email = "jason.awz2005@icloud.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.20",
+    "apscheduler>=3.10",
+    "asyncpg>=0.29",
+    "discord-py>=2.4",
+    "python-dotenv>=1.0",
+    "sqlalchemy[asyncio]>=2.0",
+]
+
+[project.scripts]
+tendies = "tendies:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=0.24",
+    "pytest>=8.0",
+]
