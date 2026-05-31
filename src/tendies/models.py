@@ -219,6 +219,33 @@ class Offer(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
 
 
+class FundingRound(Base):
+    """An open funding round (§11). The spec's §16 sketch omits a rounds table,
+    but ``$raise``/``$invest`` need persisted round state, so it lives here.
+
+    ``total_new_shares`` are minted *incrementally* as investments arrive (an
+    undersubscribed round dilutes less), so ``company.total_shares`` only grows
+    by what's actually bought. At most one ``open`` round per company.
+    """
+
+    __tablename__ = "funding_rounds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: target nuggies to raise.
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: equity percentage offered (0–100), as a float.
+    equity_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    #: shares minted if the round fills completely.
+    total_new_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_raised: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    shares_minted: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    #: open | closed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+
+
 class Event(Base):
     __tablename__ = "events"
 

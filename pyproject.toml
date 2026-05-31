@@ -1,7 +1,7 @@
 [project]
 name = "tendies"
 version = "0.1.0"
-description = "Add your description here"
+description = "A per-server Discord economy bot — nuggies, jobs, companies, equity, and central banking."
 readme = "README.md"
 authors = [
     { name = "frgmt0", email = "jason.awz2005@icloud.com" }
@@ -22,6 +22,11 @@ tendies = "tendies:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
 
 [dependency-groups]
 dev = [
