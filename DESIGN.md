@@ -179,7 +179,7 @@ Because state wages are the pool's main outflow at the bottom of the economy, th
 
 ## 8. Companies
 
-`$found <ticker> <name> <industry>` creates a private company. The ticker is a **4-character code, unique per server**, and it's the company's handle everywhere — jobs, trades, acquisitions.
+`$found <ticker> <name> <industry>` creates a private company. The ticker is a **1–4 character code, unique per server** (4 is the classic shape; shorter is allowed, like real stock tickers), and it's the company's handle everywhere — jobs, trades, acquisitions.
 
 Founding costs a fee that goes **to the pool** (a sink), and the fee scales with how many companies you **currently own**:
 
@@ -466,7 +466,7 @@ Postgres, scoped per guild. Each server is an independent economy. (See `src/ten
 `(guild_id, user_id)` (pk) · `wallet`. Net worth is computed on read, never stored.
 
 **`companies`**
-`id` (pk) · `guild_id` · `ticker` (unique per guild, 4 chars) · `name` · `owner_id` (null for state-owned) · `industry` · `treasury` · `total_shares` · `is_state` (bool) · `active` (bool) · `insolvent_days` (counter for bankruptcy)
+`id` (pk) · `guild_id` · `ticker` (unique per guild, 1–4 chars) · `name` · `owner_id` (null for state-owned) · `industry` · `treasury` · `total_shares` · `is_state` (bool) · `active` (bool) · `insolvent_days` (counter for bankruptcy)
 
 **`holdings`** — outright, vested equity. Dividends, acquisitions, and net worth all read this one table.
 `(company_id, user_id)` (pk) · `shares`

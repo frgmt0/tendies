@@ -14,10 +14,24 @@ from .errors import NotAllowed, NotFound
 from .models import Company, Employment, ServerState
 
 
-async def get_state(session: AsyncSession, guild_id: int) -> ServerState:
+async def get_state(
+    session: AsyncSession, guild_id: int, *, for_update: bool = False
+) -> ServerState:
     """The guild's economy. Bootstrap runs in the bot's before_invoke hook, so
-    this normally exists; raises if called before bootstrap (e.g. in a test)."""
-    state = await session.get(ServerState, guild_id)
+    this normally exists; raises if called before bootstrap (e.g. in a test).
+
+    Pass ``for_update=True`` on the tick paths to take a row lock so a manual
+    ``$forcetick`` and the scheduled tick can't double-advance the same guild on
+    Postgres (the clause is a no-op on SQLite, which serializes writers anyway).
+    """
+    if for_update:
+        state = (
+            await session.execute(
+                select(ServerState).where(ServerState.guild_id == guild_id).with_for_update()
+            )
+        ).scalars().first()
+    else:
+        state = await session.get(ServerState, guild_id)
     if state is None:
         raise NotFound("This server's economy hasn't been set up yet.")
     return state

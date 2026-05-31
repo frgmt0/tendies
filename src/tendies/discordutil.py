@@ -8,10 +8,55 @@ doesn't reinvent them. Services never import this module; it's the Discord edge.
 
 from __future__ import annotations
 
+import re
+
 import discord
 from discord.ext import commands
 
+from .errors import BadInput
+
 NUGGIE_GOLD = 0xF1C40F
+
+_AMOUNT_SUFFIXES = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
+
+
+def parse_amount(text: str) -> int:
+    """Parse a nuggie amount into a positive integer. THE single parser shared by
+    every command that takes a money argument, so ``$print`` and the capital
+    commands accept exactly the same strings.
+
+    Accepts a K/M/B/T suffix, underscore grouping, and well-formed thousands
+    commas: ``5000``, ``5,000,000``, ``5_000_000``, ``1.5M``, ``200B``. Rejects
+    mis-grouped commas (``1,5M`` does NOT become 15M), non-numeric input, and
+    non-positive values — raising :class:`BadInput` so callers can let it
+    propagate to the standard error renderer.
+    """
+    if text is None:
+        raise BadInput("Expected an amount, e.g. `5000`, `1.5M`, or `200B`.")
+    token = text.strip().upper()
+    if not token:
+        raise BadInput("Expected an amount, e.g. `5000`, `1.5M`, or `200B`.")
+
+    multiplier = 1
+    if token[-1] in _AMOUNT_SUFFIXES:
+        multiplier = _AMOUNT_SUFFIXES[token[-1]]
+        token = token[:-1].strip()
+
+    token = token.replace("_", "")
+    if re.fullmatch(r"\d{1,3}(,\d{3})+", token):  # well-formed thousands grouping
+        token = token.replace(",", "")
+    elif "," in token:
+        raise BadInput(f"Couldn't read **{text}** as an amount — check the commas.")
+
+    if not re.fullmatch(r"\d+(\.\d+)?", token):
+        raise BadInput(
+            f"Couldn't read **{text}** as an amount. Try `5000`, `1.5M`, or `200B`."
+        )
+
+    amount = int(round(float(token) * multiplier))
+    if amount <= 0:
+        raise BadInput("Amount must be positive.")
+    return amount
 
 
 def mention(user_id: int) -> str:

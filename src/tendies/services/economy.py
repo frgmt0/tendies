@@ -98,9 +98,11 @@ async def ensure_bootstrapped(
             )
     await session.flush()
 
-    # ---- best-effort roll of the current week's events (§5) --------------
-    monday = today - dt.timedelta(days=today.weekday())
-    await events.roll_weekly_events(session, state, monday)
+    # ---- roll the week's events only when bootstrapping ON a Monday (§5) --
+    # Rolling mid-week would assign events to already-passed business days that
+    # can never fire; let the first Monday tick own event generation otherwise.
+    if gameday.is_monday(today):
+        await events.roll_weekly_events(session, state, today)
 
     return state
 

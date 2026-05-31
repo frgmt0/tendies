@@ -9,43 +9,15 @@ propagate to the bot's ``on_command_error`` for uniform display.
 
 from __future__ import annotations
 
-import re
 import shlex
 
 from discord.ext import commands
 
 from .. import config, discordutil, events, formatting as fmt, gameday, lookups, money, tick
+from ..discordutil import parse_amount
 from ..errors import BadInput
 from ..scheduler import render_tick_report
 from ..services import economy
-
-#: Magnitude suffixes accepted by ``$print`` (e.g. ``200B`` -> 200,000,000,000).
-_SUFFIXES = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
-_AMOUNT_RE = re.compile(r"^\s*([0-9][0-9,]*\.?[0-9]*)\s*([KkMmBbTt]?)\s*$")
-
-
-def parse_amount(raw: str) -> int:
-    """Parse a nuggie amount with optional K/M/B/T suffix into an integer.
-
-    Accepts ``"200000"``, ``"200,000"``, ``"200B"``, ``"1.5M"``. Raises
-    :class:`BadInput` on anything malformed or non-positive so the caller can
-    let it propagate to the standard error renderer.
-    """
-    if raw is None:
-        raise BadInput("Give me an amount, e.g. `200B` or `5000000`.")
-    match = _AMOUNT_RE.match(raw)
-    if not match:
-        raise BadInput(f"Couldn't read **{raw}** as an amount. Try `200B` or `5000000`.")
-    number_part, suffix = match.group(1).replace(",", ""), match.group(2).upper()
-    try:
-        value = float(number_part)
-    except ValueError:
-        raise BadInput(f"Couldn't read **{raw}** as an amount.")
-    value *= _SUFFIXES.get(suffix, 1)
-    amount = int(value)
-    if amount <= 0:
-        raise BadInput("Amount must be positive.")
-    return amount
 
 
 def _parse_percent(raw: str) -> float:
@@ -235,7 +207,7 @@ class AdminCog(commands.Cog, name="Manager"):
         if not await discordutil.require_manager(ctx):
             return
         async with self.bot.db.session() as session:
-            state = await lookups.get_state(session, ctx.guild.id)
+            state = await lookups.get_state(session, ctx.guild.id, for_update=True)
             report = await tick.run_tick(session, state)
 
         if report.closed:

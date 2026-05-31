@@ -56,12 +56,25 @@ class TickScheduler:
             except Exception:
                 log.exception("Tick failed for guild %s", guild_id)
                 continue
+            # Announcing is best-effort: a failure here (e.g. no sendable
+            # channel) must never starve the remaining guilds' ticks.
             if report is not None and not report.closed:
-                await self.announce(guild_id, report)
+                try:
+                    await self.announce(guild_id, report)
+                except Exception:
+                    log.exception("Announce failed for guild %s", guild_id)
 
     async def run_one(self, guild_id: int) -> TickReport | None:
         async with self.bot.db.session() as session:
-            state = await session.get(ServerState, guild_id)
+            # Row-lock the guild so a manual $forcetick can't double-advance the
+            # same economy concurrently with the scheduled tick (Postgres).
+            state = (
+                await session.execute(
+                    select(ServerState)
+                    .where(ServerState.guild_id == guild_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
             if state is None:
                 return None
             return await tick.run_tick(session, state)
@@ -75,12 +88,14 @@ class TickScheduler:
             return
         try:
             await channel.send(embed=render_tick_report(report))
-        except discord.DiscordException:
+        except Exception:
             log.warning("Could not post tick announcement in guild %s", guild_id)
 
 
 def _announce_channel(guild: discord.Guild) -> discord.TextChannel | None:
     me = guild.me
+    if me is None:  # member object not cached yet — can't evaluate permissions
+        return None
     sys_ch = guild.system_channel
     if sys_ch is not None and sys_ch.permissions_for(me).send_messages:
         return sys_ch

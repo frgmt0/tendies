@@ -16,47 +16,12 @@ to propagate so the bot's ``on_command_error`` renders it.
 
 from __future__ import annotations
 
-import re
-
 from discord.ext import commands
 
 from .. import discordutil, lookups
-from ..errors import BadInput
+from ..discordutil import parse_amount
 from ..formatting import fmt
 from ..services import acquisitions, investment
-
-# ---------------------------------------------------------------------------
-# Amount parsing: 5B, 5_000_000, 5,000,000, 1.5M
-# ---------------------------------------------------------------------------
-
-_SUFFIXES = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
-_AMOUNT_RE = re.compile(r"^(\d+(?:\.\d+)?)([KMBT]?)$")
-
-
-def parse_amount(text: str) -> int:
-    """Parse a nuggie amount allowing K/M/B/T suffixes, underscores, and commas.
-
-    Examples: ``5B`` -> 5_000_000_000, ``1.5M`` -> 1_500_000,
-    ``5_000_000`` / ``5,000,000`` -> 5_000_000. Raises :class:`BadInput` on
-    anything malformed or non-positive.
-    """
-    if text is None:
-        raise BadInput("Expected an amount.")
-    cleaned = text.strip().replace(",", "").replace("_", "").upper()
-    if not cleaned:
-        raise BadInput("Expected an amount.")
-    m = _AMOUNT_RE.match(cleaned)
-    if not m:
-        raise BadInput(
-            f"Couldn't read **{text}** as an amount. "
-            f"Try e.g. `5000`, `5,000,000`, `1.5M`, or `5B`."
-        )
-    number, suffix = m.group(1), m.group(2)
-    value = float(number) * (_SUFFIXES[suffix] if suffix else 1)
-    amount = int(round(value))
-    if amount <= 0:
-        raise BadInput("Amount must be positive.")
-    return amount
 
 
 class CapitalCog(commands.Cog, name="Capital"):

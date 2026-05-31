@@ -207,6 +207,7 @@ async def _vest_grants(session: AsyncSession, state: ServerState) -> int:
     ).all()
 
     total = 0
+    companies: dict[int, Company] = {}
     for grant, user_id, company_id in rows:
         if grant.days_elapsed >= grant.vest_days:
             await session.delete(grant)
@@ -223,6 +224,15 @@ async def _vest_grants(session: AsyncSession, state: ServerState) -> int:
                 holding = Holding(company_id=company_id, user_id=user_id, shares=0)
                 session.add(holding)
             holding.shares += delta
+            # Equity grants are dilutive: shares are minted as they vest, so the
+            # company's total_shares grows in lockstep (keeping the invariant
+            # total_shares == Σ holdings). Minting on vest also makes forfeiture
+            # free — unvested shares were simply never created.
+            company = companies.get(company_id)
+            if company is None:
+                company = await session.get(Company, company_id)
+                companies[company_id] = company
+            company.total_shares += delta
             grant.vested_shares = target
             total += delta
         if grant.days_elapsed >= grant.vest_days:

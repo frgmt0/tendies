@@ -83,6 +83,11 @@ async def open_round(
         )
 
     new_shares = round(company.total_shares * equity_pct / (100 - equity_pct))
+    if new_shares <= 0:
+        raise BadInput(
+            "That equity stake is too small to mint a single share at this "
+            "company's size — raise the percentage."
+        )
     implied_valuation = amount / (equity_pct / 100)
 
     round_ = FundingRound(
@@ -182,6 +187,14 @@ async def invest(
         shares = round_.total_new_shares - round_.shares_minted
     else:
         shares = (round_.total_new_shares * contribution) // round_.amount
+
+    # Refuse a contribution too small to buy even one share — otherwise the
+    # investor would be charged for nothing (the money would land in the
+    # treasury but mint zero equity).
+    if shares <= 0:
+        raise BadInput(
+            "That amount is too small to buy any shares in this round — invest more."
+        )
 
     company.total_shares += shares
 
