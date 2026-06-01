@@ -211,7 +211,11 @@ async def accept(
     # 5) Lay off all of the target's employees (forfeiting unvested grants).
     employees_laid_off = await lifecycle.end_all_employment(session, target)
 
-    # 6) The target ceases to exist.
+    # 6) The cap table was just cashed out, so the target's shares cease to
+    #    exist (mirrors the bankruptcy path; keeps total_shares == Σ holdings).
+    await lifecycle.wipe_holdings(session, target)
+
+    # 7) The target ceases to exist.
     target.active = False
 
     return AcceptResult(

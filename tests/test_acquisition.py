@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tendies.config import STARTING_POOL
 from tendies.errors import InsufficientFunds
@@ -118,6 +118,53 @@ async def test_accept_runs_full_close(world):
     # Conservation: payout tax to pool, treasury moved around, nothing minted.
     await w.assert_supply(STARTING_POOL)
     assert total_tax == 1_500_000
+
+
+async def test_accept_dissolves_target_shares_and_holds_invariant(world):
+    """After a close, the bought-out cap table ceases to exist: the target has
+    no holdings and total_shares == 0, and the global share invariant
+    (Σ all holdings == Σ active companies' total_shares) still holds."""
+    w = world
+    state = w.state
+    acquirer, target = await _build(w)
+
+    await acquisitions.offer(w.session, state, ACQ_OWNER, "ACQ", "TGT", 10_000_000)
+    await w.session.flush()
+    await acquisitions.accept(w.session, state, TGT_OWNER, "ACQ")
+    await w.session.flush()
+    await w.session.refresh(target)
+
+    # The dissolved target: no holdings, zero shares (the fix).
+    target_holdings = (
+        await w.session.execute(
+            select(func.coalesce(func.sum(Holding.shares), 0)).where(
+                Holding.company_id == target.id
+            )
+        )
+    ).scalar_one()
+    assert target_holdings == 0
+    assert target.total_shares == 0
+
+    # Global invariant across *active* companies.
+    from tendies.models import Company
+
+    active_total_shares = (
+        await w.session.execute(
+            select(func.coalesce(func.sum(Company.total_shares), 0)).where(
+                Company.guild_id == w.guild_id,
+                Company.active == True,  # noqa: E712
+            )
+        )
+    ).scalar_one()
+    all_holdings = (
+        await w.session.execute(
+            select(func.coalesce(func.sum(Holding.shares), 0))
+            .join(Company, Holding.company_id == Company.id)
+            .where(Company.active == True)  # noqa: E712
+        )
+    ).scalar_one()
+    assert active_total_shares == all_holdings
+    await w.assert_supply(STARTING_POOL)
 
 
 async def test_accept_fails_if_treasury_insufficient(world):

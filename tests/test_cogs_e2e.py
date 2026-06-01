@@ -450,6 +450,18 @@ async def test_event_industry_and_market_wide():
         await h.close()
 
 
+async def test_event_multiplier_clamped_to_sane_range():
+    h = await Harness.create()
+    try:
+        ctx = await h.invoke(
+            h.ctx(9, manager=True), "event", raw='tech 100000 "Singularity"'
+        )
+        assert "⚠️" in ctx.last_text()
+        assert "unrealistically large" in ctx.last_text()
+    finally:
+        await h.close()
+
+
 async def test_event_bad_industry_errors():
     h = await Harness.create()
     try:

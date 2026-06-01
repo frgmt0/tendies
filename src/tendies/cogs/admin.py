@@ -203,6 +203,11 @@ class AdminCog(commands.Cog, name="Manager"):
             raise BadInput(f"Couldn't read **{multiplier_raw}** as a multiplier.")
         if multiplier <= 0:
             raise BadInput("Multiplier must be greater than 0.")
+        if multiplier > 100:
+            raise BadInput(
+                "Multiplier is unrealistically large (max 100×). A boom is "
+                "usually 1.5–3×, a bust 0.1–0.7×."
+            )
 
         return industry, multiplier, blurb
 

@@ -61,10 +61,17 @@ async def close_jobs(session: AsyncSession, company: Company) -> None:
 
 
 async def wipe_holdings(session: AsyncSession, company: Company) -> None:
-    """Destroy all equity in ``company`` (shares cease to exist)."""
+    """Destroy all equity in ``company`` (shares cease to exist).
+
+    Zeros ``total_shares`` alongside deleting the holdings so the per-company
+    invariant ``total_shares == Σ holdings`` stays true even for a dissolved
+    company — both teardown paths (bankruptcy and acquisition) rely on this so
+    no stale share count survives on a dead row.
+    """
     await session.execute(
         delete(Holding).where(Holding.company_id == company.id)
     )
+    company.total_shares = 0
 
 
 async def transfer_open_jobs(

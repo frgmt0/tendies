@@ -89,11 +89,13 @@ async def test_bankruptcy_unwinds_everything(world):
     # 2) Company is inactive.
     assert doomed.active is False
     assert doomed.insolvent_days == 0
-    # 3) Holdings wiped.
+    # 3) Holdings wiped — and total_shares zeroed in lockstep so the dead row
+    #    keeps total_shares == Σ holdings.
     holdings = (
         await w.session.execute(select(Holding).where(Holding.company_id == doomed.id))
     ).scalars().all()
     assert holdings == []
+    assert doomed.total_shares == 0
     # 4) Jobs closed.
     open_jobs = (
         await w.session.execute(
