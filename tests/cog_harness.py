@@ -156,6 +156,7 @@ class FakeContext:
         self.guild = FakeGuild(GUILD_ID)
         self.channel = FakeChannel()
         self.prefix = prefix
+        self.clean_prefix = prefix
         self.sent: list[FakeMessage] = []
 
     async def send(self, content: str | None = None, *, embed: discord.Embed | None = None):
@@ -264,6 +265,32 @@ class Harness:
             await cmd.callback(cog, ctx, *args, **kwargs)
         except GameError as err:  # mirror TendiesBot.on_command_error
             await ctx.send(f"⚠️ {err}")
+        return ctx
+
+    async def invoke_help(self, ctx: FakeContext, *args) -> FakeContext:
+        """Drive the real ``TendiesHelp`` (the bot's custom help command).
+
+        ``invoke_help(ctx)`` → landing page; ``invoke_help(ctx, "found")`` →
+        command detail (exercising the live fee-ladder path); an unknown name
+        → the not-found error, exactly as the bot routes it.
+        """
+        from tendies.help_menu import TendiesHelp
+
+        async with self.db.session() as session:
+            await economy.ensure_bootstrapped(session, ctx.guild.id, dt.date.today())
+
+        hc = TendiesHelp()
+        hc.context = ctx
+        hc.get_destination = lambda: ctx  # capture sends on the test context
+        if not args:
+            await hc.send_bot_help({})
+            return ctx
+        name = args[0]
+        entry = self.registry.get(name)
+        if entry is None:
+            await hc.send_error_message(await hc.command_not_found(name))
+        else:
+            await hc.send_command_help(entry[1])
         return ctx
 
     # -- test-only state helpers (conserving; never via fake commands) ----

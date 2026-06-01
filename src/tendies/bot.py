@@ -23,6 +23,7 @@ from discord.ext import commands
 from .config import Settings, get_settings
 from .db import Database
 from .errors import GameError
+from .help_menu import TendiesHelp
 
 log = logging.getLogger("tendies")
 
@@ -49,7 +50,7 @@ class TendiesBot(commands.Bot):
         super().__init__(
             command_prefix=self.settings.command_prefix,
             intents=_intents(),
-            help_command=commands.DefaultHelpCommand(no_category="Commands"),
+            help_command=TendiesHelp(),
             case_insensitive=True,
         )
         self.db: Database = db or Database(self.settings.database_url)

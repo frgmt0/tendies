@@ -65,6 +65,7 @@ Currency is nuggies (`nug`); the prefix is `$` by default. Wallet, valuation, an
 
 | Command | Who | Purpose |
 |---|---|---|
+| `$help` / `$help <command>` | anyone | Getting-started menu, or detail for one command (e.g. `$help found` shows the industries and your live founding-fee ladder) |
 | `$balance` / `$bal` | anyone | Your wallet (real), job, and holdings |
 | `$jobs` | anyone | List open positions (incl. always-open state jobs) |
 | `$apply <job_id>` | anyone | Apply to a job (state jobs auto-accept) |
@@ -112,6 +113,7 @@ Source lives in `src/tendies/`, importable as `tendies.<module>`.
 - `formatting.py` — number formatting (commas, K/M/B/T abbreviation, real-terms conversion, percentages).
 - `discordutil.py` — the Discord edge: manager checks, embeds, reaction confirmations, interactive prompts, and the shared amount parser.
 - `emojis.py` — the server's custom emoji glyphs (currency, industries, events, etc.) in one place; cogs reference names, not raw IDs.
+- `help_menu.py` — the custom `$help` command (`commands.HelpCommand` subclass): an onboarding landing page plus per-command detail, with the `$found` industry list and fee ladder derived live from `config` + the guild's `ServerState`.
 - `db.py` — async SQLAlchemy engine + session context manager.
 - `bot.py` — `TendiesBot`: owns `db`, `settings`, and the scheduler; bootstraps guilds on demand and renders `GameError`s centrally.
 - `scheduler.py` — advances every guild's economy each tick interval and posts the daily-close announcement.
