@@ -212,6 +212,89 @@ class AdminCog(commands.Cog, name="Manager"):
         return industry, multiplier, blurb
 
     # ------------------------------------------------------------------
+    # $stats — the Manager macro dashboard (governance at a glance).
+    # ------------------------------------------------------------------
+    @commands.command(name="stats", aliases=["macro", "dashboard"])
+    async def stats_cmd(self, ctx: commands.Context) -> None:
+        if not await discordutil.require_manager(ctx):
+            return
+        async with self.bot.db.session() as session:
+            state = await lookups.get_state(session, ctx.guild.id)
+            s = await economy.macro_stats(session, state)
+            weekday = gameday.weekday_name(state.game_day).capitalize()
+
+        embed = discordutil.embed(
+            f"{emojis.TREASURY_POOL} Macro dashboard — {weekday}",
+            "Governance at a glance — all figures measured from the ledger.",
+        )
+        embed.add_field(
+            name=f"{emojis.NUGGIE} Money supply",
+            value=(
+                f"Supply: **{fmt.abbr(s.money_supply)}** nug\n"
+                f"Minted since start: **{fmt.abbr(s.minted_since_start)}** nug "
+                f"({emojis.MONEY_PRINTER} all-time prints)\n"
+                f"Inflation index: **{s.inflation_index:.3f}**"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name=f"{emojis.TREASURY_POOL} Pool",
+            value=(
+                f"Pool: **{fmt.abbr(s.pool_balance)}** nug "
+                f"(**{fmt.abbr(s.pool_real)}** real) · **{s.pool_pct:.1f}%** of supply\n"
+                f"Wallets: {fmt.abbr(s.wallets_total)} · "
+                f"Treasuries: {fmt.abbr(s.treasuries_total)}\n"
+                f"Recession cap today: **{fmt.abbr(s.recession_cap)}** nug "
+                f"(max aggregate revenue/day)"
+            ),
+            inline=False,
+        )
+        pool_net = (s.flow_tax + s.flow_printed) - (s.flow_revenue + s.flow_state_wages)
+        arrow = emojis.STOCK_UP if pool_net >= 0 else emojis.STOCK_DOWN
+        embed.add_field(
+            name=f"{emojis.STOCK_UP} Flows · last {s.flow_window_days} business days",
+            value=(
+                f"Revenue realized: {fmt.abbr(s.flow_revenue)} (pool→treasuries)\n"
+                f"Wages: {fmt.abbr(s.flow_private_wages)} private + "
+                f"{fmt.abbr(s.flow_state_wages)} state\n"
+                f"{emojis.DIVIDEND} Dividends: {fmt.abbr(s.flow_dividends)} · "
+                f"Tax→pool: {fmt.abbr(s.flow_tax)} · "
+                f"{emojis.MONEY_PRINTER} Printed: {fmt.abbr(s.flow_printed)}\n"
+                f"{arrow} Net pool change: **{fmt.abbr(pool_net)}** nug"
+            ),
+            inline=False,
+        )
+        if s.industry_counts:
+            mix = " · ".join(
+                f"{emojis.industry(ind)}×{n}"
+                for ind, n in sorted(
+                    s.industry_counts.items(), key=lambda kv: kv[1], reverse=True
+                )
+            )
+        else:
+            mix = "none yet"
+        embed.add_field(
+            name=f"{emojis.FACTORY} Real economy",
+            value=(
+                f"Players: **{s.players_total}** total · "
+                f"{s.players_employed} employed · {s.players_clocked_in} clocked in\n"
+                f"Active companies: **{s.active_companies}**\n"
+                f"Industry mix: {mix}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name=f"{emojis.LEADERBOARD} Wealth concentration",
+            value=(
+                f"Total net worth (real): **{fmt.abbr(s.total_net_worth_real)}** nug\n"
+                f"Gini: **{s.gini:.2f}** (0 = equal, 1 = winner-takes-all)\n"
+                f"Richest player holds **{s.top_share:.1f}%** of all net worth"
+            ),
+            inline=False,
+        )
+        await ctx.send(embed=embed)
+
+    # ------------------------------------------------------------------
     # $forcetick — advance the game one day now (ops/testing). §9
     # ------------------------------------------------------------------
     @commands.command(name="forcetick")

@@ -418,6 +418,44 @@ async def test_print_confirm_no_cancels():
         await h.close()
 
 
+async def test_stats_requires_manager():
+    h = await Harness.create()
+    try:
+        ctx = await h.invoke(h.ctx(600), "stats")  # not a manager
+        assert "Manager only" in ctx.last_text()
+    finally:
+        await h.close()
+
+
+async def test_stats_dashboard_reflects_real_activity():
+    h = await Harness.create()
+    try:
+        # One state worker clocks in, one founder builds a company, then tick.
+        jid = await h.first_state_job_id()
+        await h.invoke(h.ctx(610), "apply", jid)
+        await h.invoke(h.ctx(610), "clockin")
+        await h.fund_wallet(611, 2_000_000)
+        await h.invoke(h.ctx(611), "found", args='STAT "Stat Co" tech')
+        # Manager prints, then advances a day so flows are non-zero.
+        pctx = h.ctx(9, manager=True)
+        h.bot.queue(True)
+        await h.invoke(pctx, "print", "1B")
+        await h.invoke(h.ctx(9, manager=True), "forcetick")
+
+        ctx = await h.invoke(h.ctx(9, manager=True), "stats")
+        text = ctx.last_text()
+        assert "Macro dashboard" in text
+        assert "Money supply" in text
+        assert "Gini" in text
+        assert "Recession cap" in text
+        # The founded company shows in the industry mix (tech glyph).
+        assert emojis.INDUSTRY_TECH in text
+        # Minting is reflected in money supply.
+        assert await h.money_supply() == STARTING_POOL + 1_000_000_000
+    finally:
+        await h.close()
+
+
 async def test_taxrate_set():
     h = await Harness.create()
     try:

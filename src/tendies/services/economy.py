@@ -15,13 +15,14 @@ subclasses with player-facing messages.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import config, events, gameday, money
+from .. import config, events, gameday, money, valuation
 from ..errors import BadInput
-from ..models import Company, Job, ServerState
+from ..models import Company, Employment, Job, ServerState, Transaction, User
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +190,154 @@ async def pool_info(session: AsyncSession, state: ServerState) -> PoolInfo:
     )
 
 
+# ---------------------------------------------------------------------------
+# $stats — the Manager macro dashboard. Everything here is *measured* from the
+# ledger, holdings, and live valuations; nothing is stored or estimated.
+# ---------------------------------------------------------------------------
+
+#: Trailing window (business days) for the flow figures on the dashboard.
+STATS_FLOW_WINDOW = 7
+
+
+@dataclass
+class MacroStats:
+    # Money stock
+    money_supply: int
+    minted_since_start: int  # supply - STARTING_POOL == Σ all prints
+    inflation_index: float
+    pool_balance: int
+    pool_real: float
+    pool_pct: float  # pool as a share of supply
+    wallets_total: int
+    treasuries_total: int
+    recession_cap: int  # 0.10 * pool — the aggregate daily revenue ceiling
+    # Flows over the trailing window (nominal nuggies)
+    flow_window_days: int
+    flow_revenue: int
+    flow_private_wages: int
+    flow_state_wages: int
+    flow_tax: int
+    flow_dividends: int
+    flow_printed: int
+    # Real economy
+    players_total: int
+    players_employed: int
+    players_clocked_in: int
+    active_companies: int
+    industry_counts: dict[str, int] = field(default_factory=dict)
+    # Wealth concentration
+    total_net_worth_real: float = 0.0
+    gini: float = 0.0
+    top_share: float = 0.0  # richest player's share of total net worth
+
+
+def _gini(values: list[float]) -> float:
+    """Gini coefficient (0 = perfect equality, →1 = one player holds everything)
+    over non-negative net-worth values. Returns 0.0 for an empty/zero economy."""
+    xs = sorted(v for v in values if v > 0)
+    n = len(xs)
+    total = sum(xs)
+    if n == 0 or total <= 0:
+        return 0.0
+    cumulative = sum(i * x for i, x in enumerate(xs, start=1))
+    return (2.0 * cumulative) / (n * total) - (n + 1) / n
+
+
+async def _flow(session: AsyncSession, guild_id: int, types, lo: dt.date, hi: dt.date) -> int:
+    return int(await session.scalar(
+        select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+            Transaction.guild_id == guild_id,
+            Transaction.type.in_(types),
+            Transaction.game_day >= lo,
+            Transaction.game_day <= hi,
+        )
+    ) or 0)
+
+
+async def macro_stats(session: AsyncSession, state: ServerState) -> MacroStats:
+    """Compute the Manager dashboard from real data (`$stats`)."""
+    guild_id = state.guild_id
+    supply = await money.money_supply(session, guild_id)
+    wallets = int(await session.scalar(
+        select(func.coalesce(func.sum(User.wallet), 0)).where(User.guild_id == guild_id)
+    ) or 0)
+    treasuries = int(await session.scalar(
+        select(func.coalesce(func.sum(Company.treasury), 0)).where(Company.guild_id == guild_id)
+    ) or 0)
+    index = state.inflation_index or 1.0
+
+    lo = gameday.business_days_before(state.game_day, STATS_FLOW_WINDOW - 1)
+    hi = state.game_day
+
+    # Labor & companies.
+    players_total = int(await session.scalar(
+        select(func.count()).select_from(User).where(User.guild_id == guild_id)
+    ) or 0)
+    players_employed = int(await session.scalar(
+        select(func.count(func.distinct(Employment.user_id)))
+        .select_from(Employment)
+        .join(Company, Employment.company_id == Company.id)
+        .where(Company.guild_id == guild_id)
+    ) or 0)
+    players_clocked_in = int(await session.scalar(
+        select(func.count(func.distinct(Employment.user_id)))
+        .select_from(Employment)
+        .join(Company, Employment.company_id == Company.id)
+        .where(Company.guild_id == guild_id, Employment.clocked_in == True)  # noqa: E712
+    ) or 0)
+
+    industry_rows = (await session.execute(
+        select(Company.industry, func.count())
+        .where(
+            Company.guild_id == guild_id,
+            Company.active == True,  # noqa: E712
+            Company.is_state == False,  # noqa: E712
+        )
+        .group_by(Company.industry)
+    )).all()
+    industry_counts = {ind: int(n) for ind, n in industry_rows}
+    active_companies = sum(industry_counts.values())
+
+    # Wealth concentration over real net worth.
+    price_map = await valuation.valuation_map(session, state)
+    user_ids = (await session.execute(
+        select(User.user_id).where(User.guild_id == guild_id)
+    )).scalars().all()
+    net_worths = [
+        (await valuation.net_worth(session, state, uid, price_map=price_map)).total
+        for uid in user_ids
+    ]
+    total_nw = sum(net_worths)
+    top_share = (max(net_worths) / total_nw * 100) if net_worths and total_nw > 0 else 0.0
+
+    return MacroStats(
+        money_supply=supply,
+        minted_since_start=supply - config.STARTING_POOL,
+        inflation_index=index,
+        pool_balance=state.pool_balance,
+        pool_real=state.pool_balance / index,
+        pool_pct=(state.pool_balance / supply * 100) if supply > 0 else 0.0,
+        wallets_total=wallets,
+        treasuries_total=treasuries,
+        recession_cap=int(config.RECESSION_CAP_FRACTION * state.pool_balance),
+        flow_window_days=STATS_FLOW_WINDOW,
+        flow_revenue=await _flow(session, guild_id, ("revenue",), lo, hi),
+        flow_private_wages=await _flow(session, guild_id, ("wage",), lo, hi),
+        flow_state_wages=await _flow(session, guild_id, ("state_wage",), lo, hi),
+        flow_tax=await _flow(session, guild_id, ("tax",), lo, hi),
+        flow_dividends=await _flow(session, guild_id, ("dividend",), lo, hi),
+        flow_printed=await _flow(session, guild_id, ("print",), lo, hi),
+        players_total=players_total,
+        players_employed=players_employed,
+        players_clocked_in=players_clocked_in,
+        active_companies=active_companies,
+        industry_counts=industry_counts,
+        total_net_worth_real=total_nw,
+        gini=_gini(net_worths),
+        top_share=top_share,
+    )
+
+
 __all__ = [
     "ensure_bootstrapped",
     "projected_index",
@@ -197,4 +346,6 @@ __all__ = [
     "set_day",
     "pool_info",
     "PoolInfo",
+    "macro_stats",
+    "MacroStats",
 ]

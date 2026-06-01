@@ -58,6 +58,7 @@ SUMMARY: dict[str, str] = {
     "taxrate": "set the wage + dividend tax rate",
     "setday": "correct the game calendar",
     "event": "fire a market event on an industry",
+    "stats": "macro dashboard: pool health, flows, wealth concentration",
     "forcetick": "advance the game one day right now",
 }
 
@@ -90,6 +91,7 @@ USAGE: dict[str, str] = {
     "taxrate": "taxrate <percent>",
     "setday": "setday <weekday>",
     "event": 'event <industry> <multiplier> "<blurb>"',
+    "stats": "stats",
     "forcetick": "forcetick",
 }
 
@@ -152,6 +154,12 @@ EXTRAS: dict[str, str] = {
         "valuations for the rest of the day."
     ),
     "forcetick": "**Manager only.** Ops/testing — runs a daily close immediately.",
+    "stats": (
+        "**Manager only.** Your governance cockpit: money supply and prints, "
+        "pool health (and the recession cap), the last few days of flows in/out "
+        "of the pool, who's working, and wealth concentration (Gini). Use it to "
+        "decide when to tax, cut state jobs, or print."
+    ),
 }
 
 #: Ordered categories for the landing menu: (emoji, heading, command names).
@@ -165,7 +173,7 @@ CATEGORIES: list[tuple[str, str, list[str]]] = [
     (emojis.LEADERBOARD, "Markets & info",
      ["market", "leaderboard", "pool", "today"]),
     (emojis.MONEY_PRINTER, "Managers · central bank",
-     ["print", "taxrate", "setday", "event", "forcetick"]),
+     ["print", "taxrate", "setday", "event", "stats", "forcetick"]),
 ]
 
 #: Title-bar emoji per command (falls back to the nuggie).

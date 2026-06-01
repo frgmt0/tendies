@@ -92,6 +92,7 @@ Currency is nuggies (`nug`); the prefix is `$` by default. Wallet, valuation, an
 | `$taxrate <percent>` | **Manager** | Set the wage + dividend tax rate |
 | `$setday <weekday>` | **Manager** | Correct the game day if the schedule drifts |
 | `$event <industry> <multiplier> "<blurb>"` | **Manager** | Fire a market event for today |
+| `$stats` / `$macro` | **Manager** | Macro dashboard: money supply, pool health, recent flows, wealth concentration (Gini) |
 | `$forcetick` | **Manager** | Advance the game one day immediately (ops/testing) |
 
 ## Project layout
