@@ -339,6 +339,27 @@ class CompanyCog(commands.Cog, name="Companies"):
             )
         )
 
+    # ---------------------------------------------------------------- promote
+    @commands.command(name="promote")
+    async def promote(self, ctx: commands.Context, target: str, pct: float) -> None:
+        """$promote <@employee> <% raise> — owner-only, raise an employee's wage."""
+        target_id = _parse_user_id(target)
+        if target_id is None:
+            raise BadInput("Mention the employee, e.g. `$promote @user 10`.")
+        async with self.bot.db.session() as session:
+            state = await lookups.get_state(session, ctx.guild.id)
+            result = await companies.promote(
+                session, state, ctx.author.id, target_id, pct
+            )
+        await ctx.send(
+            embed=discordutil.embed(
+                f"{emojis.STOCK_UP} Raise granted",
+                f"{mention(result.user_id)} at **{result.ticker}**: "
+                f"{fmt(result.old_wage)} → **{fmt(result.new_wage)} nug/day** "
+                f"(+{result.pct:g}%). Takes effect at the next tick.",
+            )
+        )
+
 
 def _parse_job_fields(raw: str) -> tuple[str, int, int, int]:
     """Parse the 4 pipe-separated job fields into

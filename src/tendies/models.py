@@ -77,6 +77,30 @@ class User(Base):
     wallet: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
+class PlayerProfile(Base):
+    """Per-player progression + preferences, kept in its own table so it can be
+    added to a live database with no column migration (``create_all`` creates a
+    missing table but never alters an existing one). One row per (guild, user),
+    created lazily on first clock-in.
+    """
+
+    __tablename__ = "player_profiles"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    #: consecutive business days clocked in (resets on a missed business day).
+    clockin_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_clockin_day: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    #: highest streak milestone (in days) already paid out, so each is one-time.
+    milestone_claimed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: opted in to a ping when they forget to clock in on a business day.
+    reminder_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: whether we've asked the opt-in question (asked exactly once, ever).
+    reminder_prompted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: last game day we pinged them, to ping at most once per day.
+    last_reminded_day: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+
 class Company(Base):
     __tablename__ = "companies"
     __table_args__ = (
@@ -272,7 +296,7 @@ class Transaction(Base):
     #: the game day this transaction belongs to (drives income-gate windowing).
     game_day: Mapped[dt.date] = mapped_column(Date, nullable=False, index=True)
     #: wage | state_wage | tax | dividend | founding_fee | revenue | invest
-    #: | acquisition | print | bankruptcy | seed
+    #: | acquisition | print | bankruptcy | seed | streak_bonus
     type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     src: Mapped[str | None] = mapped_column(String(48), nullable=True)
     dst: Mapped[str | None] = mapped_column(String(48), nullable=True)

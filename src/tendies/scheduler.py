@@ -8,6 +8,7 @@ only decides *when* to advance, never *what day it is*.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 import discord
@@ -18,6 +19,7 @@ from . import emojis
 from . import formatting as fmt
 from . import gameday, tick
 from .models import ServerState
+from .services import employment
 from .tick import TickReport
 
 log = logging.getLogger("tendies.scheduler")
@@ -39,8 +41,22 @@ class TickScheduler:
             max_instances=1,
             coalesce=True,
         )
+        # Reminder sweep runs on the same cadence but phase-shifted to roughly
+        # mid-day, so opted-in players get nudged with time left to clock in
+        # before the close. Deduped per game day, so the exact phase is harmless.
+        offset = max(5, interval // 2)
+        self._sched.add_job(
+            self.remind_all_guilds,
+            "interval",
+            seconds=interval,
+            id="tendies-reminder",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=dt.datetime.now() + dt.timedelta(seconds=offset),
+        )
         self._sched.start()
-        log.info("Tick scheduler started (every %ds).", interval)
+        log.info("Tick scheduler started (every %ds; reminders +%ds).", interval, offset)
 
     def shutdown(self) -> None:
         if self._sched.running:
@@ -91,6 +107,46 @@ class TickScheduler:
             await channel.send(embed=render_tick_report(report))
         except Exception:
             log.warning("Could not post tick announcement in guild %s", guild_id)
+
+    async def remind_all_guilds(self) -> None:
+        """Ping opted-in players who haven't clocked in yet today (business days)."""
+        async with self.bot.db.session() as session:
+            states = (await session.execute(select(ServerState))).scalars().all()
+            due: dict[int, list[int]] = {}
+            for state in states:
+                try:
+                    user_ids = await employment.due_for_reminder(session, state)
+                except Exception:
+                    log.exception("Reminder query failed for guild %s", state.guild_id)
+                    continue
+                if user_ids:
+                    due[state.guild_id] = user_ids
+                    await employment.mark_reminded(session, state, user_ids)
+            # Commit the marks before sending, so a failed send can't cause a
+            # re-ping next sweep (best-effort, like the tick announcement).
+
+        for guild_id, user_ids in due.items():
+            try:
+                await self._ping_forgetful(guild_id, user_ids)
+            except Exception:
+                log.exception("Reminder ping failed for guild %s", guild_id)
+
+    async def _ping_forgetful(self, guild_id: int, user_ids: list[int]) -> None:
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        channel = _announce_channel(guild)
+        if channel is None:
+            return
+        prefix = self.bot.settings.command_prefix
+        mentions = " ".join(f"<@{uid}>" for uid in user_ids)
+        try:
+            await channel.send(
+                f"{emojis.CLOCK_IN} {mentions} — you haven't clocked in today! "
+                f"`{prefix}clockin` before the close to get paid and keep your streak."
+            )
+        except Exception:
+            log.warning("Could not post clock-in reminder in guild %s", guild_id)
 
 
 def _announce_channel(guild: discord.Guild) -> discord.TextChannel | None:

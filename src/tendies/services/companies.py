@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import lifecycle, lookups, money
 from .. import valuation as valuation_mod
 from ..config import DEFAULT_PRODUCTIVITY, SHARES_AT_FOUNDING, normalize_industry
-from ..errors import BadInput, GameError, InsufficientFunds, NotFound
+from ..errors import BadInput, GameError, InsufficientFunds, NotAllowed, NotFound
 from ..formatting import fmt
 from ..models import (
     Application,
@@ -452,3 +452,60 @@ async def fire(
 
     await session.delete(employment)
     await session.flush()
+
+
+@dataclass
+class PromoteResult:
+    ticker: str
+    company_name: str
+    user_id: int
+    old_wage: int
+    new_wage: int
+    pct: float
+
+
+async def promote(
+    session: AsyncSession,
+    state: ServerState,
+    owner_id: int,
+    target_user_id: int,
+    pct: float,
+) -> PromoteResult:
+    """Give an employee a raise of ``pct`` percent on their daily wage.
+
+    The company is resolved from the target's (single) employment, and the
+    caller must own it. Only the wage changes — future payroll is paid from the
+    treasury at the new rate from the next tick. Raises are positive; the new
+    wage must round up to a real increase.
+    """
+    if pct <= 0:
+        raise BadInput("A raise has to be a positive percentage, e.g. `10` for +10%.")
+    if pct > 1000:
+        raise BadInput("That's an absurd raise (max 1000%). Pick a smaller number.")
+
+    employment = await lookups.get_employment(session, state.guild_id, target_user_id)
+    if employment is None:
+        raise NotFound("That user isn't employed, so there's nothing to raise.")
+
+    company = await session.get(Company, employment.company_id)
+    if company is None or company.is_state:
+        raise NotAllowed("State wages are fixed — you can't promote a state employee.")
+    lookups.require_owner(company, owner_id)
+
+    old_wage = employment.daily_wage
+    new_wage = int(round(old_wage * (1 + pct / 100)))
+    if new_wage <= old_wage:
+        raise BadInput(
+            "That raise rounds to no change at this wage — bump the percentage."
+        )
+    employment.daily_wage = new_wage
+    await session.flush()
+
+    return PromoteResult(
+        ticker=company.ticker,
+        company_name=company.name,
+        user_id=target_user_id,
+        old_wage=old_wage,
+        new_wage=new_wage,
+        pct=pct,
+    )

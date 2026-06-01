@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import gameday, money, valuation
+from .. import config, gameday, money, valuation
 from ..errors import BadInput, GameError, NotFound
 from ..lookups import get_employment
 from ..models import (
@@ -29,8 +29,21 @@ from ..models import (
     EquityGrant,
     Holding,
     Job,
+    PlayerProfile,
     ServerState,
 )
+
+
+async def get_or_create_profile(
+    session: AsyncSession, guild_id: int, user_id: int
+) -> PlayerProfile:
+    """The player's progression row, created lazily on first use."""
+    profile = await session.get(PlayerProfile, (guild_id, user_id))
+    if profile is None:
+        profile = PlayerProfile(guild_id=guild_id, user_id=user_id)
+        session.add(profile)
+        await session.flush()
+    return profile
 
 
 # ---------------------------------------------------------------------------
@@ -182,13 +195,25 @@ class ClockResult:
     company_name: str
     daily_wage: int
     already: bool
+    streak: int = 0
+    #: a one-time milestone bonus paid this clock-in (0 if none).
+    bonus_gross: int = 0
+    bonus_tax: int = 0
+    bonus_milestone: int = 0  # the milestone day reached, e.g. 10
+    #: True only on a player's very first clock-in — the cog asks the opt-in
+    #: question once; the answer is stored via :func:`set_reminder_opt_in`.
+    ask_reminder: bool = False
 
 
 async def clock_in(
     session: AsyncSession, state: ServerState, user_id: int
 ) -> ClockResult:
     """Clock in for the day: collect today's wage at the tick and contribute to
-    the employer's production. Closed on weekends; unemployed players can't."""
+    the employer's production. Closed on weekends; unemployed players can't.
+
+    Also advances the player's clock-in streak and pays any newly-reached,
+    one-time streak milestone bonus (from the pool, taxed like a wage).
+    """
     if not gameday.is_business_day(state.game_day):
         raise BadInput(
             "The market is closed — it's the weekend. No clocking in until Monday."
@@ -198,13 +223,121 @@ async def clock_in(
         raise NotFound(
             "You're not employed. Find a job with `$jobs` and `$apply <job_id>`."
         )
-    already = employment.clocked_in
-    employment.clocked_in = True
     company = await session.get(Company, employment.company_id)
+    company_name = company.name if company else ""
+
+    profile = await get_or_create_profile(session, state.guild_id, user_id)
+    # Ask the reminder opt-in question exactly once, on the first clock-in.
+    ask_reminder = not profile.reminder_prompted
+    if ask_reminder:
+        profile.reminder_prompted = True
+
+    if employment.clocked_in:
+        return ClockResult(
+            company_name=company_name,
+            daily_wage=employment.daily_wage,
+            already=True,
+            streak=profile.clockin_streak,
+            ask_reminder=ask_reminder,
+        )
+
+    employment.clocked_in = True
+
+    # ---- streak ------------------------------------------------------------
+    today = state.game_day
+    prev_business_day = gameday.business_days_before(today, 1)
+    if profile.last_clockin_day == prev_business_day:
+        profile.clockin_streak += 1
+    elif profile.last_clockin_day == today:
+        pass  # defensive; the already-clocked-in path handles this
+    else:
+        profile.clockin_streak = 1
+    profile.last_clockin_day = today
+
+    # ---- one-time milestone bonus -----------------------------------------
+    bonus_gross = bonus_tax = bonus_milestone = 0
+    for days, amount in config.STREAK_MILESTONES:
+        if profile.clockin_streak >= days and profile.milestone_claimed < days:
+            user = await money.get_or_create_user(session, state.guild_id, user_id)
+            gross, tax = await money.pay_bonus(
+                session, state, user, amount, today, note=f"{days}-day streak"
+            )
+            if gross > 0:
+                profile.milestone_claimed = days
+                bonus_gross, bonus_tax, bonus_milestone = gross, tax, days
+            break  # streak grows by one per day, so at most one new milestone
+
     return ClockResult(
-        company_name=company.name if company else "",
+        company_name=company_name,
         daily_wage=employment.daily_wage,
-        already=already,
+        already=False,
+        streak=profile.clockin_streak,
+        bonus_gross=bonus_gross,
+        bonus_tax=bonus_tax,
+        bonus_milestone=bonus_milestone,
+        ask_reminder=ask_reminder,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Clock-in reminders (opt-in ping flow)
+# ---------------------------------------------------------------------------
+
+async def set_reminder_opt_in(
+    session: AsyncSession, state: ServerState, user_id: int, opt_in: bool
+) -> None:
+    """Persist a player's clock-in-reminder preference (and mark them prompted)."""
+    profile = await get_or_create_profile(session, state.guild_id, user_id)
+    profile.reminder_opt_in = opt_in
+    profile.reminder_prompted = True
+
+
+async def due_for_reminder(
+    session: AsyncSession, state: ServerState
+) -> list[int]:
+    """User ids to nudge: employed at an active company, opted in, NOT clocked in
+    today, and not already reminded for today's game day. Empty on weekends."""
+    if not gameday.is_business_day(state.game_day):
+        return []
+    rows = (
+        await session.execute(
+            select(Employment.user_id)
+            .join(Company, Employment.company_id == Company.id)
+            .join(
+                PlayerProfile,
+                and_(
+                    PlayerProfile.guild_id == Company.guild_id,
+                    PlayerProfile.user_id == Employment.user_id,
+                ),
+            )
+            .where(
+                Company.guild_id == state.guild_id,
+                Company.active == True,  # noqa: E712
+                Employment.clocked_in == False,  # noqa: E712
+                PlayerProfile.reminder_opt_in == True,  # noqa: E712
+                or_(
+                    PlayerProfile.last_reminded_day.is_(None),
+                    PlayerProfile.last_reminded_day < state.game_day,
+                ),
+            )
+        )
+    ).scalars().all()
+    return sorted({int(u) for u in rows})
+
+
+async def mark_reminded(
+    session: AsyncSession, state: ServerState, user_ids: list[int]
+) -> None:
+    """Record that ``user_ids`` were reminded for today (dedupes same-day pings)."""
+    if not user_ids:
+        return
+    await session.execute(
+        update(PlayerProfile)
+        .where(
+            PlayerProfile.guild_id == state.guild_id,
+            PlayerProfile.user_id.in_(user_ids),
+        )
+        .values(last_reminded_day=state.game_day)
     )
 
 

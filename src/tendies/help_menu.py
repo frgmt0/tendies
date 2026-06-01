@@ -35,8 +35,9 @@ SUMMARY: dict[str, str] = {
     "balance": "your wallet, job, net worth, and holdings",
     "jobs": "list every open position (state jobs are always hiring)",
     "apply": "apply to a job by id (state jobs hire you instantly)",
-    "clockin": "show up for work — earn your wage at the daily close",
+    "clockin": "show up for work — earn your wage, build a streak",
     "clockout": "skip work for the day (no wage, no production)",
+    "reminders": "toggle a ping when you forget to clock in",
     "quit": "leave a job; keep vested equity, forfeit the rest",
     "found": "start your own company (costs a scaling fee)",
     "company": "inspect a company: treasury, cap table, valuation",
@@ -44,6 +45,7 @@ SUMMARY: dict[str, str] = {
     "applicants": "review who applied to your company",
     "hire": "hire an applicant",
     "fire": "let an employee go",
+    "promote": "give one of your employees a raise",
     "raise": "open a funding round to sell equity for cash",
     "invest": "buy equity in an open round (accredited investors)",
     "dividend": "pay treasury cash to shareholders, pro-rata",
@@ -70,6 +72,7 @@ USAGE: dict[str, str] = {
     "apply": "apply <job_id>",
     "clockin": "clockin",
     "clockout": "clockout",
+    "reminders": "reminders <on | off>",
     "quit": "quit [ticker]",
     "found": "found <ticker> <name> <industry>",
     "company": "company <ticker>",
@@ -77,6 +80,7 @@ USAGE: dict[str, str] = {
     "applicants": "applicants <ticker>",
     "hire": "hire <ticker> <letter | @user>",
     "fire": "fire <ticker> <@user>",
+    "promote": "promote <@employee> <% raise>",
     "raise": "raise <ticker> <amount> <equity%>",
     "invest": "invest <ticker> <amount>",
     "dividend": "dividend <ticker> <amount>",
@@ -107,7 +111,20 @@ EXTRAS: dict[str, str] = {
     "clockin": (
         "Wages aren't paid instantly — you're paid at the **daily close** (the "
         "tick), and only if you clocked in. Markets are closed on weekends. Some "
-        "jobs also vest equity the longer you stay."
+        "jobs also vest equity the longer you stay.\n"
+        "Clocking in every business day builds a **streak** 🔥 — hit "
+        f"{', '.join(str(d) for d, _ in config.STREAK_MILESTONES)} days for "
+        "one-time loyalty bonuses. The first time you clock in, I'll offer to "
+        "**ping you if you forget** (toggle anytime with `reminders on/off`)."
+    ),
+    "reminders": (
+        "Opt in or out of a daily ping when you've forgotten to clock in on a "
+        "business day — sent partway through the day so you've still got time."
+    ),
+    "promote": (
+        "Owner only. Raises the employee's daily wage by your percentage, paid "
+        "from your company's treasury from the next tick on. Resolves the company "
+        "from where they work, so you just mention the person."
     ),
     "quit": (
         "Vested shares are yours to keep forever; unvested shares are forfeited. "
@@ -165,9 +182,9 @@ EXTRAS: dict[str, str] = {
 #: Ordered categories for the landing menu: (emoji, heading, command names).
 CATEGORIES: list[tuple[str, str, list[str]]] = [
     (emojis.HIRING, "Player & jobs",
-     ["balance", "jobs", "apply", "clockin", "clockout", "quit"]),
+     ["balance", "jobs", "apply", "clockin", "clockout", "reminders", "quit"]),
     (emojis.FACTORY, "Your companies",
-     ["found", "company", "postjob", "applicants", "hire", "fire"]),
+     ["found", "company", "postjob", "applicants", "hire", "fire", "promote"]),
     (emojis.STOCK_UP, "Capital markets",
      ["raise", "invest", "dividend", "acquire", "accept", "decline"]),
     (emojis.LEADERBOARD, "Markets & info",

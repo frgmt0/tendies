@@ -18,7 +18,7 @@ import pytest
 from tendies import config, emojis
 from tendies.config import STARTING_POOL
 
-from cog_harness import Harness
+from cog_harness import GUILD_ID, Harness
 
 pytestmark = pytest.mark.asyncio
 
@@ -98,10 +98,12 @@ async def test_balance_broke_then_state_job_paid_at_tick():
         assert "Hired" in ctx.last_text()
         assert emojis.HIRING in ctx.last_text()
 
-        # Clock in, then a manager advances the day.
-        ctx = await h.invoke(h.ctx(uid), "clockin")
-        assert emojis.CLOCK_IN in ctx.last_text()
-        assert "Clocked in" in ctx.last_text()
+        # Clock in (first time also offers the reminder opt-in), then tick.
+        ctx = h.ctx(uid)
+        h.bot.queue(True)  # accept the one-time reminder prompt
+        await h.invoke(ctx, "clockin")
+        assert emojis.CLOCK_IN in ctx.all_text()
+        assert "Clocked in" in ctx.all_text()
 
         await h.invoke(h.ctx(9, manager=True), "forcetick")
 
@@ -110,6 +112,108 @@ async def test_balance_broke_then_state_job_paid_at_tick():
         bal_text = ctx.last_text()
         assert "0 nug (real)" not in bal_text.splitlines()[1]  # wallet line is no longer zero
         assert await h.money_supply() == STARTING_POOL
+    finally:
+        await h.close()
+
+
+async def test_clockin_first_time_offers_reminder_and_shows_streak():
+    h = await Harness.create()
+    try:
+        uid = 720
+        jid = await h.first_state_job_id()
+        await h.invoke(h.ctx(uid), "apply", jid)
+
+        ctx = h.ctx(uid)
+        h.bot.queue(True)  # react ✅ to the opt-in question
+        await h.invoke(ctx, "clockin")
+        text = ctx.all_text()
+        assert "Clocked in" in text
+        assert "streak" in text.lower()
+        assert "ping you" in text  # the opt-in question was asked
+        assert "You're in" in text  # opted in
+
+        # Opt-in persisted on the player's profile.
+        from tendies.models import PlayerProfile
+        async with h.db.session() as s:
+            p = await s.get(PlayerProfile, (GUILD_ID, uid))
+            assert p.reminder_opt_in is True
+            assert p.reminder_prompted is True
+            assert p.clockin_streak == 1
+    finally:
+        await h.close()
+
+
+async def test_clockin_reminder_decline_is_honored():
+    h = await Harness.create()
+    try:
+        uid = 721
+        jid = await h.first_state_job_id()
+        await h.invoke(h.ctx(uid), "apply", jid)
+        ctx = h.ctx(uid)
+        h.bot.queue(False)  # ignore the ✅ (timeout)
+        await h.invoke(ctx, "clockin")
+        assert "No pings" in ctx.all_text()
+        from tendies.models import PlayerProfile
+        async with h.db.session() as s:
+            p = await s.get(PlayerProfile, (GUILD_ID, uid))
+            assert p.reminder_opt_in is False
+            assert p.reminder_prompted is True  # won't be asked again
+    finally:
+        await h.close()
+
+
+async def test_reminders_toggle_command():
+    h = await Harness.create()
+    try:
+        uid = 722
+        ctx = await h.invoke(h.ctx(uid), "reminders", "on")
+        assert "ON" in ctx.last_text()
+        ctx = await h.invoke(h.ctx(uid), "reminders", "off")
+        assert "OFF" in ctx.last_text()
+        ctx = await h.invoke(h.ctx(uid), "reminders", "wat")
+        assert "reminders on" in ctx.last_text()
+    finally:
+        await h.close()
+
+
+async def test_promote_raises_employee_wage():
+    h = await Harness.create()
+    try:
+        owner, worker = 730, 731
+        await h.fund_wallet(owner, 1_000_000)
+        await h.invoke(h.ctx(owner), "found", args='PROM "Promo Co" tech')
+        octx = h.ctx(owner)
+        h.bot.queue("Worker | 1000 | 0 | 0", "Do work.")
+        await h.invoke(octx, "postjob", "PROM")
+        job_id = await h.open_job_id("PROM")
+        await h.invoke(h.ctx(worker), "apply", job_id)
+        apps_ctx = await h.invoke(h.ctx(owner), "applicants", "PROM")  # noqa: F841
+        await h.invoke(h.ctx(owner), "hire", "PROM", "a")
+
+        ctx = await h.invoke(h.ctx(owner), "promote", f"<@{worker}>", 50.0)
+        text = ctx.last_text()
+        assert emojis.STOCK_UP in text
+        assert "Raise granted" in text
+        assert "1,500" in text  # 1000 +50%
+    finally:
+        await h.close()
+
+
+async def test_promote_rejected_for_non_owner():
+    h = await Harness.create()
+    try:
+        owner, worker, stranger = 740, 741, 742
+        await h.fund_wallet(owner, 1_000_000)
+        await h.invoke(h.ctx(owner), "found", args='OWNS "Owns Co" tech')
+        octx = h.ctx(owner)
+        h.bot.queue("Worker | 1000 | 0 | 0", "Do work.")
+        await h.invoke(octx, "postjob", "OWNS")
+        job_id = await h.open_job_id("OWNS")
+        await h.invoke(h.ctx(worker), "apply", job_id)
+        await h.invoke(h.ctx(owner), "hire", "OWNS", "a")
+
+        ctx = await h.invoke(h.ctx(stranger), "promote", f"<@{worker}>", 50.0)
+        assert "⚠️" in ctx.last_text()
     finally:
         await h.close()
 

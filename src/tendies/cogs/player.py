@@ -149,23 +149,84 @@ class PlayerCog(commands.Cog, name="Player"):
             result = await employment.clock_in(session, state, ctx.author.id)
 
         if result.already:
+            streak_line = (
+                f"\n🔥 **{result.streak}-day streak** going."
+                if result.streak > 1
+                else ""
+            )
             await ctx.send(
                 embed=discordutil.embed(
                     f"{emojis.CLOCK_IN} Already clocked in",
                     f"You're already clocked in at **{result.company_name}** today. "
                     f"You'll be paid {formatting.fmt(result.daily_wage)} nug at the "
-                    f"tick.",
+                    f"tick.{streak_line}",
                 )
             )
-            return
-
-        await ctx.send(
-            embed=discordutil.embed(
-                f"{emojis.CLOCK_IN} Clocked in at {result.company_name}",
+        else:
+            lines = [
                 f"You'll be paid **{formatting.fmt(result.daily_wage)} nug** at "
                 f"today's tick and you're contributing to "
-                f"**{result.company_name}**'s production. See you at close.",
+                f"**{result.company_name}**'s production. See you at close."
+            ]
+            if result.streak > 1:
+                lines.append(f"🔥 **{result.streak}-day streak** — keep it going.")
+            else:
+                lines.append("🔥 Day **1** of a new streak.")
+            if result.bonus_milestone:
+                net = result.bonus_gross - result.bonus_tax
+                lines.append(
+                    f"🎉 **{result.bonus_milestone}-day milestone!** Loyalty bonus "
+                    f"**+{formatting.fmt(net)} nug** (after tax), straight from the pool."
+                )
+            await ctx.send(
+                embed=discordutil.embed(
+                    f"{emojis.CLOCK_IN} Clocked in at {result.company_name}",
+                    "\n".join(lines),
+                )
             )
+
+        # First-ever clock-in: ask whether we may ping them if they forget.
+        if result.ask_reminder:
+            opted = await discordutil.confirm(
+                ctx,
+                "⏰ Want me to **ping you if you forget to clock in** on a future "
+                "business day? React ✅ within 60s.",
+                timeout=60,
+            )
+            async with self.bot.db.session() as session:
+                state = await lookups.get_state(session, ctx.guild.id)
+                await employment.set_reminder_opt_in(
+                    session, state, ctx.author.id, opted
+                )
+            await ctx.send(
+                f"👍 You're in — I'll ping you if you forget to clock in. "
+                f"Turn it off anytime with `{ctx.prefix}reminders off`."
+                if opted
+                else f"No pings from me. Enable them later with `{ctx.prefix}reminders on`."
+            )
+
+    # -------------------------------------------------------------------
+    # $reminders <on|off>
+    # -------------------------------------------------------------------
+    @commands.command(name="reminders")
+    async def reminders(self, ctx: commands.Context, setting: str = "") -> None:
+        """Toggle clock-in reminder pings: `$reminders on` / `$reminders off`."""
+        choice = setting.strip().lower()
+        if choice in ("on", "yes", "enable", "true"):
+            opt_in = True
+        elif choice in ("off", "no", "disable", "false"):
+            opt_in = False
+        else:
+            await ctx.send(
+                f"Use `{ctx.prefix}reminders on` or `{ctx.prefix}reminders off` "
+                f"to control whether I ping you when you forget to clock in."
+            )
+            return
+        async with self.bot.db.session() as session:
+            state = await lookups.get_state(session, ctx.guild.id)
+            await employment.set_reminder_opt_in(session, state, ctx.author.id, opt_in)
+        await ctx.send(
+            f"{emojis.CLOCK_IN} Clock-in reminders are now **{'ON' if opt_in else 'OFF'}**."
         )
 
     # -------------------------------------------------------------------

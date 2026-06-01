@@ -69,8 +69,9 @@ Currency is nuggies (`nug`); the prefix is `$` by default. Wallet, valuation, an
 | `$balance` / `$bal` | anyone | Your wallet (real), job, and holdings |
 | `$jobs` | anyone | List open positions (incl. always-open state jobs) |
 | `$apply <job_id>` | anyone | Apply to a job (state jobs auto-accept) |
-| `$clockin` | employee | Collect today's wage + contribute to your employer's production |
+| `$clockin` | employee | Collect today's wage + contribute to production; builds a daily streak (milestone bonuses) |
 | `$clockout` | employee | Clock out for the day |
+| `$reminders <on/off>` | anyone | Toggle a ping when you forget to clock in (offered on first clock-in) |
 | `$quit <ticker>` | employee | Leave a job; keep vested equity, forfeit the rest |
 | `$found <ticker> <name> <industry>` | anyone | Found a company (scaling fee → pool) |
 | `$company <ticker>` | anyone | Company detail: treasury, cap table, revenue, valuation |
@@ -78,6 +79,7 @@ Currency is nuggies (`nug`); the prefix is `$` by default. Wallet, valuation, an
 | `$applicants <ticker>` | owner | Review applicants |
 | `$hire <ticker> <applicant>` | owner | Hire an applicant |
 | `$fire <ticker> @user` | owner | Fire an employee |
+| `$promote @user <percent>` | owner | Give one of your employees a raise |
 | `$raise <ticker> <amount> <equity%>` | owner | Open a funding round (alias `$fundraise`) |
 | `$invest <ticker> <amount>` | accredited | Buy into an open round |
 | `$dividend <ticker> <amount>` | owner | Pay a pro-rata dividend (alias `$div`) |
@@ -102,7 +104,7 @@ Source lives in `src/tendies/`, importable as `tendies.<module>`.
 **Engine core** (the frozen contract — shared primitives every slice builds on):
 
 - `config.py` — tunable game constants (§17 knobs), industries, state-company seeds, and environment-driven `Settings`.
-- `models.py` — SQLAlchemy ORM: `ServerState`, `User`, `Company`, `Holding`, `Job`, `Employment`, `EquityGrant`, `Application`, `Offer`, `FundingRound`, `Event`, `Transaction`, plus account helpers.
+- `models.py` — SQLAlchemy ORM: `ServerState`, `User`, `PlayerProfile` (clock-in streak + reminder prefs), `Company`, `Holding`, `Job`, `Employment`, `EquityGrant`, `Application`, `Offer`, `FundingRound`, `Event`, `Transaction`, plus account helpers.
 - `errors.py` — `GameError` and its player-facing subclasses (`NotFound`, `NotAllowed`, `InsufficientFunds`, `BadInput`).
 - `money.py` — the single chokepoint for all money movement (fees, capital injection, revenue, wages, dividends, tax withholding, the ledger).
 - `lifecycle.py` — cap-table reads and the unwinding helpers used on quit, firing, and bankruptcy.

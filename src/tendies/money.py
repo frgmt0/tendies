@@ -273,6 +273,44 @@ async def pay_state_wage(
     return gross, tax
 
 
+async def pay_bonus(
+    session: AsyncSession,
+    state: ServerState,
+    user: User,
+    gross: int,
+    game_day: dt.date,
+    *,
+    note: str | None = None,
+) -> tuple[int, int]:
+    """A streak/loyalty bonus: pool -> wallet, taxed into the pool like a wage.
+
+    Conserving (a transfer from the pool, not minting). Returns
+    ``(gross_paid, tax_withheld)``, or ``(0, 0)`` if the bonus is non-positive
+    or the pool can't currently cover it (the bonus is simply skipped, never
+    paid on credit). Recorded as ``streak_bonus`` — deliberately NOT in
+    :data:`INCOME_TX_TYPES`, so a reward can't be farmed to clear the
+    accredited-investor income gate.
+    """
+    if gross <= 0 or state.pool_balance < gross:
+        return 0, 0
+    tax = tax_amount(gross, state.tax_rate)
+    state.pool_balance -= gross
+    user.wallet += gross
+    record_tx(
+        session,
+        guild_id=state.guild_id,
+        game_day=game_day,
+        type="streak_bonus",
+        amount=gross,
+        src=pool_acct(),
+        dst=wallet_acct(user.user_id),
+        user_id=user.user_id,
+        note=note,
+    )
+    _withhold(session, state, user, tax, game_day)
+    return gross, tax
+
+
 def _withhold(
     session: AsyncSession,
     state: ServerState,

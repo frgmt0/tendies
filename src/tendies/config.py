@@ -73,6 +73,15 @@ AVG_REVENUE_WINDOW_DAYS = 10
 #: Kept above the typical private wage so labor is profitable.
 DEFAULT_PRODUCTIVITY = 12_000
 
+#: Clock-in streak milestones: ``(consecutive business days, one-time bonus)``.
+#: Each is awarded once ever, paid from the pool and taxed like a wage. ~10
+#: business days ≈ two weeks, ~20 ≈ a month, ~60 ≈ a quarter. Ascending order.
+STREAK_MILESTONES: tuple[tuple[int, int], ...] = (
+    (10, 25_000),
+    (20, 75_000),
+    (60, 250_000),
+)
+
 
 # ---------------------------------------------------------------------------
 # Industries. Companies pick one; events target one. A closed set keeps event
