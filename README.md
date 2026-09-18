@@ -112,7 +112,7 @@ Remote setup uses `uv sync --frozen --no-dev`, then readiness must show a live p
 1. Make a branch and edit code/docs. Run `./scripts/pipeline.sh check`.
 2. Open a PR. GitHub Actions runs the same check on a clean Linux checkout using locked dependencies, with no production secrets.
 3. Merge a passing PR into `main`.
-4. Desktop's `tendies-poll.timer` fetches `main`, creates an isolated candidate checkout, runs the checks again, and deploys using the same deployer release engine. No changed revision means no deployment.
+4. Desktop's `tendies-poll.timer` checks approximately every five minutes (plus up to 45 seconds of jitter), fetches `main`, creates an isolated candidate checkout, runs the checks again, and deploys using the same deployer release engine. No changed revision means no deployment.
 5. A failed check keeps the current release. A failed activation triggers deployer's restore behavior. Inspect logs if polling fails.
 
 The poller reuses the protected production environment rather than checking credentials into Git. It does not poll feature branches or execute unmerged PRs. Anyone who can merge code to `main` can change production behavior; keep merge access limited. The repo's required CI check is `test`.

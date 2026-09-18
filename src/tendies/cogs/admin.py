@@ -29,6 +29,7 @@ def _parse_percent(raw: str) -> float:
     """
     if raw is None:
         raise BadInput("Give me a rate, e.g. `15` or `15%`.")
+    explicit_percent = raw.strip().endswith("%")
     token = raw.strip().rstrip("%").strip()
     try:
         value = float(token)
@@ -38,7 +39,7 @@ def _parse_percent(raw: str) -> float:
         raise BadInput("Tax rate must be a finite number.")
     if value < 0:
         raise BadInput("Tax rate can't be negative.")
-    return value / 100 if value > 1 else value
+    return value / 100 if explicit_percent or value > 1 else value
 
 
 def _require_accelerated_mode(bot) -> None:
