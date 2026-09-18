@@ -115,8 +115,21 @@ async def apply_to_job(
     if job is None or not job.open:
         raise NotFound(f"No open job with ID **{job_id}**.")
     company = await session.get(Company, job.company_id)
-    if company is None or not company.active:
+    # §16: job ids are a global autoincrement, so without the guild check a
+    # player could apply to (and join) another guild's payroll and hold two jobs.
+    if (
+        company is None
+        or not company.active
+        or company.guild_id != state.guild_id
+    ):
         raise NotFound(f"No open job with ID **{job_id}**.")
+
+    # An owner can't be their own employee: self-hiring is the cheap route to a
+    # self-dealt equity grant and a company-funded wage (§9).
+    if not company.is_state and company.owner_id == user_id:
+        raise BadInput(
+            f"You own **{company.ticker}** — you can't work for your own company."
+        )
 
     if company.is_state:
         existing = await get_employment(session, state.guild_id, user_id)

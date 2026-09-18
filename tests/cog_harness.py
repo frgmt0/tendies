@@ -47,6 +47,19 @@ from tendies.services import economy
 GUILD_ID = 424242
 
 
+def usage_hint(ctx) -> str:
+    """The *real* :meth:`tendies.bot.TendiesBot.usage_hint`, called unbound.
+
+    It only reads ``ctx.command``, ``ctx.clean_prefix`` and
+    ``self.settings.command_prefix`` — all of which :class:`FakeBot` /
+    :class:`FakeContext` provide — so the test exercises production code
+    instead of a copy of it.
+    """
+    from tendies.bot import TendiesBot
+
+    return TendiesBot.usage_hint(ctx.bot, ctx)
+
+
 # ---------------------------------------------------------------------------
 # Discord object fakes — duck-typed to exactly what the cogs touch.
 # ---------------------------------------------------------------------------
@@ -86,15 +99,30 @@ class FakeMessage:
 
     _counter = 1000
 
-    def __init__(self, content: str | None = None, embed: discord.Embed | None = None):
+    def __init__(self, content: str | None = None, embed: discord.Embed | None = None,
+                 *, can_react: bool = True):
         FakeMessage._counter += 1
         self.id = FakeMessage._counter
         self.content = content
         self.embed = embed
         self.reactions: list[str] = []
+        self._can_react = can_react
 
     async def add_reaction(self, emoji: str) -> None:
+        if not self._can_react:
+            raise forbidden("Missing Permissions: Add Reactions")
         self.reactions.append(emoji)
+
+
+def forbidden(text: str = "Missing Permissions") -> discord.Forbidden:
+    """A ``discord.Forbidden`` built without a live HTTP response — what Discord
+    raises when the bot lacks Embed Links / Add Reactions in a channel."""
+
+    class _Resp:
+        status = 403
+        reason = "Forbidden"
+
+    return discord.Forbidden(_Resp(), text)
 
 
 class _FakeReaction:
@@ -115,6 +143,17 @@ class FakeSettings:
         self.accelerated_mode = True
 
 
+class FakeCommandContext:
+    """What :meth:`FakeBot.get_context` returns — only ``.valid`` is read."""
+
+    def __init__(self, command):
+        self.command = command
+
+    @property
+    def valid(self) -> bool:
+        return self.command is not None
+
+
 class FakeBot:
     """Owns the real DB + settings and a programmable ``wait_for`` queue."""
 
@@ -123,6 +162,9 @@ class FakeBot:
         self.settings = FakeSettings()
         self._responses: deque = deque()
         self._last_message: FakeMessage | None = None
+        #: name/alias -> command, filled in by :class:`Harness`. Mirrors
+        #: ``commands.Bot.all_commands`` closely enough for command resolution.
+        self.all_commands: dict[str, object] = {}
 
     def queue(self, *responses) -> None:
         """Program upcoming ``wait_for`` results.
@@ -147,21 +189,42 @@ class FakeBot:
             return FakeMessage(content=str(resp))
         raise asyncio.TimeoutError
 
+    async def get_context(self, message) -> "FakeCommandContext":
+        """The slice of ``commands.Bot.get_context`` that
+        ``discordutil.prompt_text`` uses: does this message resolve to a real
+        command (``.valid``), or does it merely start with the prefix?"""
+        content = (getattr(message, "content", "") or "").strip()
+        prefix = self.settings.command_prefix
+        command = None
+        if content.startswith(prefix):
+            rest = content[len(prefix):].strip()
+            name = rest.split(maxsplit=1)[0] if rest else ""
+            command = self.all_commands.get(name)
+        return FakeCommandContext(command)
+
 
 class FakeContext:
     """The thin ``ctx`` surface the cogs read."""
 
-    def __init__(self, bot: FakeBot, author: FakeMember, *, prefix: str = "$"):
+    def __init__(self, bot: FakeBot, author: FakeMember, *, prefix: str = "$",
+                 can_react: bool = True):
         self.bot = bot
         self.author = author
         self.guild = FakeGuild(GUILD_ID)
         self.channel = FakeChannel()
         self.prefix = prefix
         self.clean_prefix = prefix
+        self.command = None  # set by Harness.invoke, like discord.py does
+        #: False simulates a channel where the bot lacks Add Reactions.
+        self.can_react = can_react
         self.sent: list[FakeMessage] = []
 
-    async def send(self, content: str | None = None, *, embed: discord.Embed | None = None):
-        msg = FakeMessage(content=content, embed=embed)
+    async def send(self, content: str | None = None, *, embed: discord.Embed | None = None,
+                   **kwargs):
+        """``kwargs`` (e.g. ``allowed_mentions``) are accepted and recorded so
+        cogs can opt a single send back in to mentions."""
+        msg = FakeMessage(content=content, embed=embed, can_react=self.can_react)
+        msg.kwargs = kwargs
         self.sent.append(msg)
         self.bot._last_message = msg
         return msg
@@ -217,6 +280,9 @@ class Harness:
             for cmd in cog.get_commands():
                 for name in (cmd.name, *cmd.aliases):
                     self.registry[name] = (cog, cmd)
+        # Command resolution for prompt_text's "that was a command" check.
+        bot.all_commands = {name: cmd for name, (_, cmd) in self.registry.items()}
+        bot.all_commands.setdefault("help", object())
 
     @classmethod
     async def create(cls, weekday: str = "monday") -> "Harness":
@@ -246,9 +312,11 @@ class Harness:
     # -- contexts ---------------------------------------------------------
 
     def ctx(self, user_id: int, *, manager: bool = False,
-            display_name: str | None = None) -> FakeContext:
-        member = FakeMember(user_id, manager=manager, display_name=display_name)
-        return FakeContext(self.bot, member)
+            display_name: str | None = None, can_react: bool = True,
+            roles: list[str] | None = None) -> FakeContext:
+        member = FakeMember(user_id, manager=manager, display_name=display_name,
+                            roles=roles)
+        return FakeContext(self.bot, member, can_react=can_react)
 
     # -- dispatch ---------------------------------------------------------
 
@@ -262,10 +330,18 @@ class Harness:
         if entry is None:
             raise AssertionError(f"unknown command {command!r}")
         cog, cmd = entry
+        ctx.command = cmd
         try:
             await cmd.callback(cog, ctx, *args, **kwargs)
         except GameError as err:  # mirror TendiesBot.on_command_error
             await ctx.send(f"⚠️ {err}")
+        except TypeError as err:
+            # discord.py would have raised MissingRequiredArgument before ever
+            # reaching the callback; calling the callback short of an argument
+            # raises TypeError instead. Render the same usage hint the bot does.
+            if "required positional argument" not in str(err):
+                raise
+            await ctx.send(f"⚠️ {err}{usage_hint(ctx)}")
         return ctx
 
     async def invoke_help(self, ctx: FakeContext, *args) -> FakeContext:

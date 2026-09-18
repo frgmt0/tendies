@@ -112,17 +112,45 @@ def backup_database(
     temporary = Path(temporary_name)
     try:
         with sqlite3.connect(source, timeout=30) as live, sqlite3.connect(temporary) as snapshot:
+            # Avoid leaving a WAL/SHM sidecar pair next to the temp snapshot:
+            # the online backup below can otherwise switch the destination
+            # into WAL mode, and those sidecars only get cleaned up once the
+            # connection closes cleanly.
+            snapshot.execute("PRAGMA journal_mode=DELETE")
             live.backup(snapshot)
         _check_database(temporary)
         os.chmod(temporary, 0o600)
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+        Path(str(temporary) + "-wal").unlink(missing_ok=True)
+        Path(str(temporary) + "-shm").unlink(missing_ok=True)
+
+    _prune_stale_backup_temp_files(backup_dir)
 
     backups = sorted(backup_dir.glob("tendies-*.sqlite3"), key=lambda path: path.stat().st_mtime, reverse=True)
     for expired in backups[keep:]:
         expired.unlink()
     return destination
+
+
+def _prune_stale_backup_temp_files(backup_dir: Path, *, max_age_seconds: float = 3600) -> None:
+    """Remove orphaned ``.backup-*`` temp files (and WAL/SHM sidecars).
+
+    A crash or an older build of this module between the ``mkstemp`` and the
+    matching ``unlink`` in ``backup_database`` can leave a temp snapshot (and
+    its ``-wal``/``-shm`` siblings) behind forever. Anything older than
+    ``max_age_seconds`` is safe to remove: a temp file for a backup still in
+    progress is always fresh.
+    """
+    now = time.time()
+    for stale in backup_dir.glob(".backup-*"):
+        try:
+            if now - stale.stat().st_mtime <= max_age_seconds:
+                continue
+            stale.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def restore_database(backup: Path, *, destination: Path | None = None) -> Path:

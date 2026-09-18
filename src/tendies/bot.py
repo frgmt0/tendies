@@ -27,7 +27,7 @@ from discord.ext import commands
 from .config import Settings, get_settings
 from .db import Database
 from .errors import GameError
-from .help_menu import TendiesHelp
+from .help_menu import USAGE, TendiesHelp
 from . import gameday
 from .health import acquire_database_lease, heartbeat, write_heartbeat
 
@@ -59,6 +59,11 @@ class TendiesBot(commands.Bot):
             intents=_intents(),
             help_command=TendiesHelp(),
             case_insensitive=True,
+            # Every reply echoes player input somewhere (tickers, job titles,
+            # blurbs). Suppressing mentions globally means `$company @everyone`
+            # can never turn into a ping. Individual sends that *should* ping
+            # opt back in per-message with their own ``allowed_mentions``.
+            allowed_mentions=discord.AllowedMentions.none(),
         )
         self.db: Database = db or Database(self.settings.database_url)
         # Set by setup_hook; imported lazily to avoid a circular import.
@@ -107,19 +112,62 @@ class TendiesBot(commands.Bot):
         if self.scheduler is not None and not self.scheduler.accelerated:
             await self.scheduler.synchronize_guild(ctx.guild.id, target_day=today)
 
+    def usage_hint(self, ctx: commands.Context) -> str:
+        """`$cmd <args>` + a pointer to `$help cmd`, for argument errors.
+
+        Built from :data:`help_menu.USAGE` (the same hand-written strings the
+        help menu shows), so a player who mistypes a command sees the shape of
+        it immediately instead of discord.py's bare "x is a required argument".
+        """
+        name = getattr(ctx.command, "name", None)
+        if not name:
+            return ""
+        prefix = getattr(ctx, "clean_prefix", None) or self.settings.command_prefix
+        usage = USAGE.get(name, name)
+        return f"\nUsage: `{prefix}{usage}` · full details: `{prefix}help {name}`"
+
     async def on_command_error(self, ctx: commands.Context, error: Exception) -> None:
         original = getattr(error, "original", error)
+        if isinstance(original, discord.Forbidden):
+            await self._report_forbidden(ctx, original)
+            return
         if isinstance(original, GameError):
-            await ctx.send(f"⚠️ {original}")
+            # A Forbidden raised by *this* send must not escape the handler and
+            # re-enter it; report it the same way as any other blocked send.
+            try:
+                await ctx.send(f"⚠️ {original}")
+            except discord.Forbidden as blocked:
+                await self._report_forbidden(ctx, blocked)
             return
         if isinstance(error, commands.CommandNotFound):
             return
-        if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument, commands.UserInputError)):
+        if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+            await ctx.send(f"⚠️ {error}{self.usage_hint(ctx)}")
+            return
+        if isinstance(error, commands.UserInputError):
             await ctx.send(f"⚠️ {error}")
             return
         reference = uuid.uuid4().hex[:8]
         log.exception("Command failure %s in %s", reference, ctx.command, exc_info=original)
-        await ctx.send(f"💥 That command failed. Use `/bug` and include reference `{reference}` so we can investigate.")
+        try:
+            await ctx.send(f"💥 That command failed. Use `/bug` and include reference `{reference}` so we can investigate.")
+        except discord.Forbidden:
+            log.warning("Cannot report failure %s: no send permission in %s", reference, ctx.channel)
+
+    async def _report_forbidden(self, ctx: commands.Context, error: discord.Forbidden) -> None:
+        """A send was rejected by Discord — almost always a missing channel
+        permission rather than a bug. Tell the player what to grant, in plain
+        text (which may itself be blocked; then there is nothing to say)."""
+        log.warning("Forbidden in %s (%s): %s", ctx.channel, ctx.command, error)
+        try:
+            await ctx.send(
+                "🔒 I'm missing a permission in this channel — most likely "
+                "**Send Messages**, **Embed Links**, or **Add Reactions**. Ask a "
+                "moderator to grant it, or try the command in a channel where I "
+                "have it."
+            )
+        except discord.Forbidden:
+            log.warning("Cannot even send plain text in %s; staying silent.", ctx.channel)
 
     async def close(self) -> None:
         if self.scheduler is not None:

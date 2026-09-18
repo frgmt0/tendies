@@ -128,7 +128,16 @@ EXTRAS: dict[str, str] = {
     "promote": (
         "Owner only. Raises the employee's daily wage by your percentage, paid "
         "from your company's treasury from the next tick on. Resolves the company "
-        "from where they work, so you just mention the person."
+        "from where they work, so you just mention the person. The `%` is "
+        "optional — `10`, `10%`, and `0.5` all work, and a bare number is "
+        "always a percent."
+    ),
+    "postjob": (
+        "Owner only, interactive: paste `title | description | wage | shares | "
+        "vest_days` field-by-field, or reply `cancel` at any prompt to abort. "
+        "Wage takes K/M/B/T (e.g. `5K`). A malformed field line re-prompts once "
+        "before giving up. Any share grant is capped at 10% of the company's "
+        "current shares and must vest over at least 5 business days."
     ),
     "quit": (
         "Vested shares are yours to keep forever; unvested shares are forfeited. "
@@ -136,13 +145,17 @@ EXTRAS: dict[str, str] = {
     ),
     "raise": (
         "You sell brand-new shares for cash into your treasury, which **dilutes** "
-        "existing holders. A bigger equity% raises more but dilutes you more."
+        "existing holders. A bigger equity% raises more but dilutes you more. "
+        "The `%` is optional — `10`, `10%`, and `0.5` all work, and a bare "
+        "number is always a percent."
     ),
     "invest": (
         f"Open only to **accredited** investors: your income must annualize to at "
         f"least **{fmt(config.ACCREDITED_THRESHOLD)} nug/yr**, measured over your "
-        f"last {config.INCOME_WINDOW_DAYS} business days of earnings. Keep clocking "
-        f"in to qualify — or found your own company."
+        f"last {config.INCOME_WINDOW_DAYS} business days of earnings. Dividends from "
+        f"a company you own don't count toward that income. Keep clocking in to "
+        f"qualify — or found your own company. Owners can't invest in their own "
+        f"round; use `$deposit` instead."
     ),
     "dividend": (
         "Paid pro-rata to every shareholder by stake. Like wages, dividends are "
@@ -150,8 +163,10 @@ EXTRAS: dict[str, str] = {
     ),
     "acquire": (
         "A company-to-company deal: the offer is paid from **your** company's "
-        "treasury to the target's shareholders. The target's treasury and "
-        "open job listings fold into yours; its staff are laid off and may re-apply."
+        "treasury to the target's shareholders. The offer must be at least the "
+        "target's cash on hand, and you can't acquire a company you also own. "
+        "The target's treasury and open job listings fold into yours; its "
+        "staff are laid off and may re-apply."
     ),
     "pool": (
         "Wallets, valuations, and net worth are shown in **real** terms (adjusted "
@@ -168,12 +183,16 @@ EXTRAS: dict[str, str] = {
     ),
     "taxrate": (
         "**Manager only.** Tax is withheld from every wage and dividend and "
-        "flows to the pool — the main way to refill it."
+        "flows to the pool — the main way to refill it. The `%` is optional — "
+        "`10`, `10%`, and `0.5` all work, and a bare number is always a "
+        "percent, so `$taxrate 0.15` means 0.15%, not 15%."
     ),
     "event": (
         "**Manager only.** A multiplier below 1 is a slump, above 1 a boom; use "
         "`all` to hit every industry. It moves both production revenue and "
-        "valuations for the rest of the day."
+        "valuations for the rest of the day. Firing `$event` again for the same "
+        "industry on the same day **replaces** the earlier event rather than "
+        "stacking; the combined multiplier is always clamped to 0.01x-100x."
     ),
     "forcetick": "**Manager only.** Ops/testing — runs a daily close immediately.",
     "stats": (
@@ -197,6 +216,12 @@ CATEGORIES: list[tuple[str, str, list[str]]] = [
     (emojis.MONEY_PRINTER, "Managers · central bank",
      ["print", "taxrate", "setday", "event", "stats", "forcetick"]),
 ]
+
+#: Commands that only work when the bot runs an accelerated/testing calendar.
+#: Hidden from the ``$help`` landing page on a normal (wall-clock) server so
+#: Managers aren't pointed at controls that will just refuse them.
+ACCELERATED_ONLY: frozenset[str] = frozenset({"setday", "forcetick"})
+
 
 #: Title-bar emoji per command (falls back to the nuggie).
 _TITLE_EMOJI: dict[str, str] = {
@@ -235,8 +260,13 @@ def industries_field() -> str:
     )
 
 
-def build_landing_embed(prefix: str) -> discord.Embed:
-    """The ``$help`` getting-started page."""
+def build_landing_embed(prefix: str, *, accelerated: bool = False) -> discord.Embed:
+    """The ``$help`` getting-started page.
+
+    ``accelerated`` mirrors ``settings.accelerated_mode``: when it's off,
+    ``$setday``/``$forcetick`` are omitted, because they raise "available only
+    in accelerated/testing mode" on a real server.
+    """
     desc = (
         "**Tendies** is a server-run economy. Everyone starts broke — grind a "
         "job, save nuggies (`nug`), found a company, hire workers, raise money, "
@@ -259,8 +289,10 @@ def build_landing_embed(prefix: str) -> discord.Embed:
         lines = [
             f"`{prefix}{name}` — {SUMMARY[name]}"
             for name in names
-            if name in SUMMARY
+            if name in SUMMARY and (accelerated or name not in ACCELERATED_ONLY)
         ]
+        if not lines:
+            continue
         embed.add_field(name=f"{emoji} {heading}", value="\n".join(lines), inline=False)
     return embed
 
@@ -326,7 +358,11 @@ class TendiesHelp(commands.HelpCommand):
 
     async def send_bot_help(self, mapping) -> None:  # noqa: ARG002
         prefix = self.context.clean_prefix
-        await self.get_destination().send(embed=build_landing_embed(prefix))
+        settings = getattr(self.context.bot, "settings", None)
+        accelerated = bool(getattr(settings, "accelerated_mode", False))
+        await self.get_destination().send(
+            embed=build_landing_embed(prefix, accelerated=accelerated)
+        )
 
     async def send_command_help(self, command: commands.Command) -> None:
         prefix = self.context.clean_prefix

@@ -15,31 +15,10 @@ import shlex
 from discord.ext import commands
 
 from .. import config, discordutil, emojis, events, formatting as fmt, gameday, lookups, money, tick
-from ..discordutil import parse_amount
+from ..discordutil import parse_amount, parse_percent
 from ..errors import BadInput
 from ..scheduler import render_tick_report
 from ..services import economy
-
-
-def _parse_percent(raw: str) -> float:
-    """Parse a tax rate as ``"15"``, ``"15%"``, or ``"0.15"`` into a fraction.
-
-    A value greater than 1 is treated as a percentage (divided by 100); a value
-    in ``[0, 1]`` is treated as an already-normalized fraction.
-    """
-    if raw is None:
-        raise BadInput("Give me a rate, e.g. `15` or `15%`.")
-    explicit_percent = raw.strip().endswith("%")
-    token = raw.strip().rstrip("%").strip()
-    try:
-        value = float(token)
-    except ValueError:
-        raise BadInput(f"Couldn't read **{raw}** as a percentage. Try `15` or `15%`.")
-    if not math.isfinite(value):
-        raise BadInput("Tax rate must be a finite number.")
-    if value < 0:
-        raise BadInput("Tax rate can't be negative.")
-    return value / 100 if explicit_percent or value > 1 else value
 
 
 def _require_accelerated_mode(bot) -> None:
@@ -106,7 +85,7 @@ class AdminCog(commands.Cog, name="Manager"):
     async def taxrate_cmd(self, ctx: commands.Context, percent: str) -> None:
         if not await discordutil.require_manager(ctx):
             return
-        rate = _parse_percent(percent)
+        rate = parse_percent(percent, label="tax rate") / 100
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             await economy.set_tax_rate(session, state, rate)
@@ -151,6 +130,12 @@ class AdminCog(commands.Cog, name="Manager"):
     # ------------------------------------------------------------------
     @commands.command(name="event")
     async def event_cmd(self, ctx: commands.Context, *, raw: str = "") -> None:
+        """Fire a market event for today's business date.
+
+        Calling ``$event`` again for the same industry (or ``all``) on the same
+        day **replaces** the earlier event rather than stacking with it, and the
+        combined multiplier for a day is always clamped to 0.01x-100x.
+        """
         if not await discordutil.require_manager(ctx):
             return
         industry, multiplier, blurb = self._parse_event_args(raw)

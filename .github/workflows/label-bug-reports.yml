@@ -1,0 +1,49 @@
+name: Label Discord bug reports
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add bug + from-discord labels to /bug reports
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // This marker MUST stay byte-identical to `_MARKER` in
+            // src/tendies/cogs/feedback.py (which stamps it into every /bug
+            // issue body). tests/test_feedback.py asserts the two agree.
+            const marker = "Reported using Tendies /bug.";
+            const body = context.payload.issue.body || "";
+            if (!body.includes(marker)) return;
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const fromDiscord = "from-discord";
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: fromDiscord });
+            } catch (err) {
+              if (err.status !== 404) throw err;
+              try {
+                await github.rest.issues.createLabel({
+                  owner, repo, name: fromDiscord,
+                  color: "5865F2",
+                  description: "Filed via the Tendies /bug command",
+                });
+              } catch (createErr) {
+                // 422 = another concurrently-opened issue just created it.
+                // Anything else is a real failure.
+                if (createErr.status !== 422) throw createErr;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner, repo,
+              issue_number: context.payload.issue.number,
+              labels: ["bug", fromDiscord],
+            });

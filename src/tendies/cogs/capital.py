@@ -21,7 +21,7 @@ from __future__ import annotations
 from discord.ext import commands
 
 from .. import discordutil, emojis, lookups
-from ..discordutil import parse_amount
+from ..discordutil import parse_amount, parse_percent
 from ..formatting import fmt
 from ..services import acquisitions, investment
 
@@ -39,14 +39,17 @@ class CapitalCog(commands.Cog, name="Capital"):
     # -------------------------------------------------------------------
     @commands.command(name="raise", aliases=["fundraise"])
     async def raise_round(
-        self, ctx: commands.Context, ticker: str, amount: str, equity_pct: float
+        self, ctx: commands.Context, ticker: str, amount: str, equity_pct: str
     ) -> None:
         """Open a funding round: $raise <ticker> <amount> <equity%>."""
         nuggies = parse_amount(amount)
+        # Shared parser, so `10`, `10%`, and `2.5` all work (a bare number is
+        # always a percent) — the bare `float` converter rejected `10%`.
+        pct = parse_percent(equity_pct, label="equity percentage")
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             result = await investment.open_round(
-                session, state, ctx.author.id, ticker, nuggies, equity_pct
+                session, state, ctx.author.id, ticker, nuggies, pct
             )
 
         desc = (

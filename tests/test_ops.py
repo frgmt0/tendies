@@ -59,6 +59,68 @@ def test_first_deploy_backup_is_a_successful_noop(
     assert ops.backup_database(source=tmp_path / "missing.db") is None
 
 
+def test_backup_of_wal_mode_source_leaves_no_temp_or_sidecar_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "live.db"
+    make_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("INSERT INTO sample VALUES ('second')")
+    monkeypatch.setenv("TENDIES_DATA_DIR", str(tmp_path / "state"))
+
+    backup = ops.backup_database(source=database, reason="predeploy")
+
+    assert backup is not None
+    backup_dir = backup.parent
+    leftovers = sorted(p.name for p in backup_dir.iterdir() if p != backup)
+    assert leftovers == [], f"unexpected leftover files in backup dir: {leftovers}"
+    assert not (backup_dir / (backup.name + "-wal")).exists()
+    assert not (backup_dir / (backup.name + "-shm")).exists()
+
+
+def test_backup_prunes_stale_orphaned_temp_and_sidecar_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "live.db"
+    make_database(database)
+    monkeypatch.setenv("TENDIES_DATA_DIR", str(tmp_path / "state"))
+
+    backup_dir = tmp_path / "state" / "backups"
+    backup_dir.mkdir(parents=True)
+    orphan = backup_dir / ".backup-xyz.sqlite3"
+    orphan_wal = backup_dir / ".backup-xyz.sqlite3-wal"
+    orphan_shm = backup_dir / ".backup-xyz.sqlite3-shm"
+    for stale in (orphan, orphan_wal, orphan_shm):
+        stale.write_text("stale", encoding="utf-8")
+    old = time.time() - 7200
+    for stale in (orphan, orphan_wal, orphan_shm):
+        os.utime(stale, (old, old))
+
+    ops.backup_database(source=database, reason="predeploy")
+
+    assert not orphan.exists()
+    assert not orphan_wal.exists()
+    assert not orphan_shm.exists()
+
+
+def test_backup_keeps_fresh_in_progress_temp_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "live.db"
+    make_database(database)
+    monkeypatch.setenv("TENDIES_DATA_DIR", str(tmp_path / "state"))
+
+    backup_dir = tmp_path / "state" / "backups"
+    backup_dir.mkdir(parents=True)
+    fresh = backup_dir / ".backup-inflight.sqlite3"
+    fresh.write_text("in progress", encoding="utf-8")
+
+    ops.backup_database(source=database, reason="predeploy")
+
+    assert fresh.exists()
+
+
 def test_restore_verifies_source_and_preserves_pre_restore_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

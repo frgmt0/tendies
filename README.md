@@ -2,7 +2,7 @@
 
 A Discord economy where your server earns wages, builds companies, hires friends, funds businesses, and argues about monetary policy. Each Discord server has its own nuggies (`nug`), treasury pool, businesses, and ledger.
 
-**Start playing:** `$help` → `$jobs` → `$apply <id>` → `$clockin`. Wages arrive at the daily close. Save for a company, recruit workers, raise capital, and pay dividends. Use `/bug` to prepare a public [GitHub issue](https://github.com/frgmt0/tendies/issues).
+**Start playing:** `$help` → `$jobs` → `$apply <id>` → `$clockin`. Wages arrive at the daily close. Save for a company, recruit workers, raise capital, and pay dividends. Use `/bug` to prepare a public [GitHub issue](https://github.com/frgmt0/tendies/issues), auto-labelled `bug` and `from-discord`; the drafted report is also logged so the owner has a record even if it's never submitted.
 
 Production days follow the desktop server's local calendar, including DST. Weekdays run midnight to midnight; Friday wages settle at Saturday midnight. Markets close on weekends. Investment, dividends, and acquisition acceptance reopen Monday; there is no pending-trade queue. `$market` displays company valuations—v1 equity purchases happen through funding rounds, not a secondary share exchange.
 
@@ -29,6 +29,8 @@ uv run tendies
 
 Enable **Message Content Intent** and **Server Members Intent** in the [Discord Developer Portal](https://discord.com/developers/applications). Invite with `bot` and `applications.commands` scopes and View Channels, Send Messages, Embed Links, Read Message History, and Add Reactions permissions. `/bug` registers at startup; if an older invite lacks application-command access, reauthorize the bot with both scopes. Normal commands bootstrap a guild automatically.
 
+The bot suppresses all mentions globally; the one exception is `$apply`, which pings the hiring company's owner. Without **Add Reactions**, confirmation prompts (`$print`, `$quit`, ...) fall back to typing `yes`/`no` instead of reacting ✅. Without **Embed Links**, the bot replies with a plain-text hint asking a moderator to grant the missing permission instead of silently failing. Calendar-mode startup that finds the stored game day ahead of the host's local today (leftover from an accelerated playtest or `$setday`) snaps the cursor back to today without settling anything — no closes, no payouts.
+
 | Setting | Behavior |
 |---|---|
 | `DISCORD_TOKEN` | Required bot token. Use distinct production/development applications. |
@@ -45,39 +47,39 @@ For fast playtesting, set `GAME_TIME_MODE=accelerated` and `TICK_INTERVAL_SECOND
 
 ## Commands
 
-Amounts accept plain nuggies and K/M/B/T suffixes. Cash-flow inputs are nominal; wallet/net-worth displays are adjusted for inflation. `$help <command>` provides usage and live founding-fee information.
+Amounts accept plain nuggies and K/M/B/T suffixes. Cash-flow inputs are nominal; wallet/net-worth displays are adjusted for inflation. `$help <command>` provides usage and live founding-fee information. Percent arguments (`$raise`, `$promote`, `$taxrate`) accept `10`, `10%`, or `0.5` interchangeably — the trailing `%` is cosmetic, and a bare number is always a percent, never a fraction, so `$taxrate 0.15` sets 0.15%, not 15%.
 
 | Command | Who | Purpose |
 |---|---|---|
 | `$help [command]` | Anyone | Onboarding and command details |
-| `$balance` / `$bal` | Anyone | Wallet, job, holdings, net worth |
-| `$jobs [page]` / `$apply <id>` | Anyone | Find and apply for work; state jobs hire instantly |
+| `$balance` / `$bal` | Anyone | Daily wage, clocked-in status, streak, last-close earnings (gross), next-close countdown, holdings, net worth |
+| `$jobs [page]` / `$apply <id>` | Anyone | Find and apply for work; state jobs hire instantly; positions you've already applied to are marked `(applied)` |
 | `$clockin` / `$clockout` | Employee | Join or withdraw from today's shift; wages settle at close |
 | `$reminders on/off` | Anyone | Opt into a daily clock-in reminder |
 | `$quit [ticker]` | Employee | Leave employment; retain vested equity |
 | `$found <ticker> <name> <industry>` | Anyone | Found a company; the first fee is 50K |
-| `$company <ticker>` | Anyone | Treasury, capitalization, employment, valuation |
-| `$postjob <ticker>` | Owner | Interactive reusable hiring-role posting |
+| `$company <ticker>` | Anyone | Treasury, capitalization, employment, valuation, open job descriptions; owners also see pending inbound acquisition offers |
+| `$postjob <ticker>` | Owner | Interactive reusable hiring-role posting; wage accepts K/M/B/T (e.g. `5K`), `cancel` aborts any prompt, and a malformed field line re-prompts once. Equity grants are capped at 10% of current shares and must vest over at least 5 business days |
 | `$applicants <ticker>` | Owner | Review applications |
-| `$hire <ticker> <letter or @user>` | Owner | Hire an applicant |
+| `$hire <ticker> <letter or @user>` | Owner | Hire an applicant; owners cannot hire (or apply) into their own company |
 | `$fire <ticker> @user` | Owner | End employment after any clocked-in shift settles |
-| `$promote @user <percent>` | Owner | Raise an employee's wage |
+| `$promote @user <percent>` | Owner | Raise an employee's wage; percent accepts `10`, `10%`, or `0.5` — a bare number is always a percent |
 | `$deposit <ticker> <amount>` | Owner | Move your cash into the company without new shares |
-| `$raise <ticker> <amount> <equity%>` | Owner | Open a funding round; alias `$fundraise` |
+| `$raise <ticker> <amount> <equity%>` | Owner | Open a funding round; alias `$fundraise`; percent accepts `10`, `10%`, or `0.5` — a bare number is always a percent |
 | `$closeround <ticker>` | Owner/Manager | Close an unfinished round; completed investments stay |
-| `$invest <ticker> <amount>` | Accredited player | Buy new equity in an open round, weekdays |
+| `$invest <ticker> <amount>` | Accredited player | Buy new equity in an open round, weekdays; owners cannot invest in their own round (use `$deposit`), and dividends from a company you own don't count toward accredited-investor income |
 | `$dividend <ticker> <amount>` | Owner | Taxed pro-rata shareholder payout, weekdays; alias `$div` |
-| `$acquire <acquirer> <target> <offer>` | Owner | Offer company cash to acquire another company |
+| `$acquire <acquirer> <target> <offer>` | Owner | Offer company cash to acquire another company; the offer must be at least the target's cash on hand, and a player cannot acquire a company they also own |
 | `$accept <acquirer>` / `$decline <acquirer>` | Target owner | Respond to an acquisition offer; acceptance weekdays |
-| `$market [page]` / `$stocks` | Anyone | Company valuations; weekend quotes retain the last close |
+| `$market [page]` / `$stocks` | Anyone | Company valuations and open funding rounds; weekend quotes retain the last close |
 | `$leaderboard` / `$rich` | Anyone | Players by real net worth |
 | `$pool` / `$today` | Anyone | Economy and calendar status |
 | `$print <amount>` | Manager | Create money with inflation; requires reaction confirmation |
-| `$taxrate <percent>` | Manager | Set tax on wages, bonuses, dividends, and acquisition proceeds |
-| `$event <industry or all> <multiplier> <headline>` | Manager | Affect the current business day's production and valuation |
+| `$taxrate <percent>` | Manager | Set tax on wages, bonuses, dividends, and acquisition proceeds; percent accepts `10`, `10%`, or `0.5` — a bare number is always a percent, so `$taxrate 0.15` means 0.15% |
+| `$event <industry or all> <multiplier> <headline>` | Manager | Affect the current business day's production and valuation; repeating `$event` for the same industry on the same day replaces the earlier event, and combined multipliers are clamped to 0.01x-100x |
 | `$stats` / `$macro` | Manager | Macro dashboard and wealth concentration |
-| `$setday <weekday>` / `$forcetick` | Manager in accelerated mode | Testing calendar controls |
-| `/bug` | Anyone in a guild | Short form → prefilled public GitHub issue; player reviews and submits |
+| `$setday <weekday>` / `$forcetick` | Manager in accelerated mode | Testing calendar controls; hidden from the `$help` landing page outside accelerated mode |
+| `/bug` | Anyone in a guild | Short form → prefilled public GitHub issue, auto-labelled `bug`/`from-discord`; player reviews and submits |
 
 Clock-in streaks award one-time taxed bonuses at 10, 20, and 60 business days. Weekends preserve streak continuity. A worker who is clocked in cannot be fired or lose their shift through an acquisition; a voluntary quitter can wait for settlement or explicitly clock out first.
 

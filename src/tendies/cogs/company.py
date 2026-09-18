@@ -60,6 +60,38 @@ def _parse_found(raw: str) -> tuple[str, str, str]:
     return ticker, name, industry
 
 
+#: Replies that abort an interactive flow at any prompt.
+_CANCEL_WORDS = ("cancel", "abort", "stop", "quit", "nevermind", "never mind")
+
+#: How much of a job description fits on one line of the company card.
+DESCRIPTION_PREVIEW = 80
+
+
+def _is_cancel(text: str | None) -> bool:
+    return (text or "").strip().casefold() in _CANCEL_WORDS
+
+
+def _preview(text: str | None, limit: int = DESCRIPTION_PREVIEW) -> str:
+    """One-line, length-capped version of a job description."""
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _job_lines(jobs) -> list[str]:
+    """Render the open-jobs block, description included (truncated)."""
+    lines: list[str] = []
+    for job in jobs[:DISPLAY_ROWS]:
+        lines.append(f"  • {job.title} — {fmt(job.daily_wage)} nug/day")
+        blurb = _preview(job.description)
+        if blurb:
+            lines.append(f"    _{blurb}_")
+    if len(jobs) > DISPLAY_ROWS:
+        lines.append(f"  … and {len(jobs) - DISPLAY_ROWS} more open roles")
+    return lines
+
+
 def _parse_user_id(token: str) -> int | None:
     """Resolve a mention (``<@123>`` / ``<@!123>``) or bare numeric id to an int."""
     m = re.fullmatch(r"<@!?(\d+)>", token.strip())
@@ -123,15 +155,11 @@ class CompanyCog(commands.Cog, name="Companies"):
                     f"Employees clocked in today: {detail.clocked_in} / {detail.total_employees}"
                 )
                 jobs = await self._open_jobs(session, co.id)
+                lines.append("")
                 if jobs:
-                    lines.append("")
                     lines.append("**Open jobs:**")
-                    for job in jobs[:DISPLAY_ROWS]:
-                        lines.append(f"  • {job.title} — {fmt(job.daily_wage)} nug/day")
-                    if len(jobs) > DISPLAY_ROWS:
-                        lines.append(f"  … and {len(jobs) - DISPLAY_ROWS} more open roles")
+                    lines.extend(_job_lines(jobs))
                 else:
-                    lines.append("")
                     lines.append("No open jobs right now.")
                 title = (
                     f"{emojis.TREASURY_POOL} {co.name} ({co.ticker}) — "
@@ -158,6 +186,32 @@ class CompanyCog(commands.Cog, name="Companies"):
                     f"Valuation (real): {fmt(val.real_value)} nug "
                     f"→ share price {val.share_price:,.2f} nug"
                 )
+
+                jobs = await self._open_jobs(session, co.id)
+                lines.append("")
+                if jobs:
+                    lines.append("**Open jobs:**")
+                    lines.extend(_job_lines(jobs))
+                    lines.append(f"Apply with `{ctx.prefix}jobs` to get the job id.")
+                else:
+                    lines.append(
+                        f"No open jobs right now — the owner can post one with "
+                        f"`{ctx.prefix}postjob {co.ticker}`."
+                    )
+
+                # The owner is the only person who can act on an inbound offer,
+                # and nothing else surfaces one, so show it right here.
+                if co.owner_id == ctx.author.id:
+                    offers = await self._inbound_offers(session, co.id)
+                    if offers:
+                        lines.append("")
+                        lines.append("**Pending acquisition offers (you decide):**")
+                        for acquirer_ticker, amount in offers[:DISPLAY_ROWS]:
+                            lines.append(
+                                f"  • **{acquirer_ticker}** offers {fmt(amount)} nug "
+                                f"— `{ctx.prefix}accept {acquirer_ticker}` / "
+                                f"`{ctx.prefix}decline {acquirer_ticker}`"
+                            )
                 title = (
                     f"{emojis.FACTORY} {co.name} ({co.ticker}) — "
                     f"{emojis.industry(co.industry)} {label}"
@@ -178,6 +232,26 @@ class CompanyCog(commands.Cog, name="Companies"):
             )
         ).scalars().all()
 
+    async def _inbound_offers(self, session, company_id: int) -> list[tuple[str, int]]:
+        """Open acquisition offers *for* this company, as (acquirer ticker, amount).
+
+        Read straight off the models: the acquisitions service exposes no
+        "offers against me" query and its signatures are owned elsewhere.
+        """
+        from sqlalchemy import select
+
+        from ..models import Company, Offer
+
+        rows = (
+            await session.execute(
+                select(Offer.amount, Company.ticker)
+                .join(Company, Offer.acquirer_id == Company.id)
+                .where(Offer.target_id == company_id, Offer.status == "open")
+                .order_by(Offer.id.asc())
+            )
+        ).all()
+        return [(ticker, int(amount)) for amount, ticker in rows]
+
     # ---------------------------------------------------------------- postjob
     @commands.command(name="postjob")
     async def postjob(self, ctx: commands.Context, ticker: str) -> None:
@@ -194,19 +268,45 @@ class CompanyCog(commands.Cog, name="Companies"):
         fields = await discordutil.prompt_text(
             ctx,
             "Reply with: `<title> | <daily wage> | <equity sh, or 0> | <vest days, or 0>`\n"
+            "The wage takes K/M/B/T — e.g. `Barista | 5K | 0 | 0`. "
+            "Reply `cancel` to stop.\n"
             "Then paste the description in your next message.",
         )
         if fields is None:
             await ctx.send("⌛ Timed out waiting for the job details. Try `$postjob` again.")
             return
+        if _is_cancel(fields):
+            await ctx.send("Cancelled — no job posted.")
+            return
 
-        title, daily_wage, equity_shares, vest_days = _parse_job_fields(fields)
+        # One mistyped field shouldn't throw away the whole flow: re-ask once,
+        # showing what was wrong. A second failure falls through to the
+        # centralized error renderer.
+        try:
+            title, daily_wage, equity_shares, vest_days = _parse_job_fields(fields)
+        except BadInput as err:
+            retry = await discordutil.prompt_text(
+                ctx,
+                f"⚠️ {err}\nTry again: "
+                "`<title> | <daily wage> | <equity sh, or 0> | <vest days, or 0>` "
+                "(or `cancel`).",
+            )
+            if retry is None:
+                await ctx.send("⌛ Timed out waiting for the job details. Try `$postjob` again.")
+                return
+            if _is_cancel(retry):
+                await ctx.send("Cancelled — no job posted.")
+                return
+            title, daily_wage, equity_shares, vest_days = _parse_job_fields(retry)
 
         description = await discordutil.prompt_text(
-            ctx, "Now paste the job description."
+            ctx, "Now paste the job description (or `cancel`)."
         )
         if description is None:
             await ctx.send("⌛ Timed out waiting for the description. Try `$postjob` again.")
+            return
+        if _is_cancel(description):
+            await ctx.send("Cancelled — no job posted.")
             return
 
         async with self.bot.db.session() as session:
@@ -355,15 +455,17 @@ class CompanyCog(commands.Cog, name="Companies"):
 
     # ---------------------------------------------------------------- promote
     @commands.command(name="promote")
-    async def promote(self, ctx: commands.Context, target: str, pct: float) -> None:
+    async def promote(self, ctx: commands.Context, target: str, pct: str) -> None:
         """$promote <@employee> <% raise> — owner-only, raise an employee's wage."""
         target_id = _parse_user_id(target)
         if target_id is None:
             raise BadInput("Mention the employee, e.g. `$promote @user 10`.")
+        # Shared parser: `10`, `10%`, and `2.5` all mean the same raise.
+        raise_pct = discordutil.parse_percent(pct, label="raise percentage")
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             result = await companies.promote(
-                session, state, ctx.author.id, target_id, pct
+                session, state, ctx.author.id, target_id, raise_pct
             )
         await ctx.send(
             embed=discordutil.embed(
@@ -387,7 +489,9 @@ def _parse_job_fields(raw: str) -> tuple[str, int, int, int]:
     title = parts[0]
     if not title:
         raise BadInput("The job needs a title (the first field).")
-    daily_wage = _parse_int(parts[1], "daily wage")
+    # The wage goes through the shared money parser, so `5K`/`1.5M` work here
+    # exactly as they do in `$print`, `$invest`, and `$dividend`.
+    daily_wage = discordutil.parse_amount(parts[1])
     equity_shares = _parse_int(parts[2], "equity shares")
     vest_days = _parse_int(parts[3], "vest days")
     return title, daily_wage, equity_shares, vest_days

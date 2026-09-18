@@ -69,6 +69,15 @@ MAX_EVENTS_PER_WEEK = 2
 #: Window (business days) for the average-daily-revenue figure in valuation.
 AVG_REVENUE_WINDOW_DAYS = 10
 
+#: Maximum size of a single job's equity grant, as a fraction of the company's
+#: total shares at the moment the job is posted (§10). Caps founder self-dealing:
+#: a posting can't mint a controlling stake out of thin air and wipe investors.
+MAX_JOB_GRANT_FRACTION = 0.10
+
+#: Minimum vesting period (business days) for any job carrying an equity grant.
+#: Stops a 1-day "grant" from acting as an instant share mint.
+MIN_GRANT_VEST_DAYS = 5
+
 #: Default per-worker daily productivity (revenue a clocked-in worker generates).
 #: Kept above the typical private wage so labor is profitable.
 DEFAULT_PRODUCTIVITY = 12_000

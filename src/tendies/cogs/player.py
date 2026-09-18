@@ -13,14 +13,22 @@ Commands:
 
 from __future__ import annotations
 
-from discord.ext import commands
+import datetime as dt
 
-from .. import discordutil, emojis, formatting, lookups
+import discord
+from discord.ext import commands
+from sqlalchemy import func, select
+
+from .. import discordutil, emojis, formatting, gameday, lookups
 from ..discordutil import mention
+from ..models import Application, Company, Job, PlayerProfile, Transaction
 from ..services import employment
 
 #: Open-jobs page size for ``$jobs``.
 JOBS_PER_PAGE = 8
+
+#: Ledger types that count as "what you took home at the last close".
+_EARNING_TYPES = ("wage", "state_wage", "streak_bonus")
 
 
 class PlayerCog(commands.Cog, name="Player"):
@@ -36,12 +44,33 @@ class PlayerCog(commands.Cog, name="Player"):
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             info = await employment.balance(session, state, ctx.author.id)
+            job_line, clock_line = await self._work_lines(
+                session, state, ctx.author.id, ctx.prefix
+            )
+            streak = await self._streak(session, state.guild_id, ctx.author.id)
+            earned_day, earned_gross = await self._last_close_earnings(
+                session, state, ctx.author.id
+            )
 
         lines = [
             f"**{formatting.fmt(info.wallet_real)} nug** (real)",
             info.employment_label,
-            f"Net worth: **{formatting.abbr(info.net_worth)} nug** (real)",
         ]
+        if job_line:
+            lines.append(job_line)
+        if clock_line:
+            lines.append(clock_line)
+        lines.append(
+            f"🔥 Clock-in streak: **{streak}** business "
+            f"{'day' if streak == 1 else 'days'}"
+        )
+        if earned_day is not None:
+            lines.append(
+                f"Earned at last close ({earned_day.strftime('%a')}): "
+                f"**+{formatting.fmt(earned_gross)} nug** (gross, before tax)"
+            )
+        lines.append(f"Next close: {self._next_close(state)}")
+        lines.append(f"Net worth: **{formatting.abbr(info.net_worth)} nug** (real)")
         if info.holdings:
             lines.append("")
             lines.append("**Holdings**")
@@ -59,6 +88,79 @@ class PlayerCog(commands.Cog, name="Player"):
         )
         await ctx.send(embed=emb)
 
+    # -- onboarding data the balance card needs -------------------------
+    #
+    # ``employment.balance`` returns a rendered label only, and its signature is
+    # owned elsewhere, so these read the models directly through the same
+    # session.
+
+    async def _work_lines(
+        self, session, state, user_id: int, prefix: str
+    ) -> tuple[str, str]:
+        """(wage line, clock-in line) for the caller — the two facts a new
+        player needs and `$balance` never told them."""
+        emp = await lookups.get_employment(session, state.guild_id, user_id)
+        if emp is None:
+            return "", f"Not employed yet — `{prefix}jobs` lists everyone hiring."
+        wage_line = f"Daily wage: **{formatting.fmt(emp.daily_wage)} nug/day**"
+        business_day = gameday.is_business_day(state.game_day)
+        if emp.clocked_in:
+            clock_line = f"{emojis.CLOCK_IN} Clocked in today — you'll be paid at the close."
+        elif not business_day:
+            clock_line = "🌙 Weekend — no clock-in, no wage today."
+        else:
+            clock_line = "⏰ **Not clocked in today** — no wage at the close."
+        return wage_line, clock_line
+
+    async def _streak(self, session, guild_id: int, user_id: int) -> int:
+        profile = await session.get(PlayerProfile, (guild_id, user_id))
+        return int(profile.clockin_streak) if profile else 0
+
+    async def _last_close_earnings(self, session, state, user_id: int):
+        """(game day, gross nuggies) of the caller's most recent *settled* close.
+
+        Restricted to days strictly before the open cursor: ``streak_bonus`` is
+        credited at clock-in on the still-open current date, and reporting that
+        as "earned at last close" would announce a day that hasn't closed yet.
+        Once the date does close, its bonus counts — it is real income paid on a
+        settled day — which is why the type stays in :data:`_EARNING_TYPES`.
+
+        Cheap: one max() and one sum() over the already-indexed ledger.
+        Returns ``(None, 0)`` before their first payday.
+        """
+        guild_id = state.guild_id
+        day = await session.scalar(
+            select(func.max(Transaction.game_day)).where(
+                Transaction.guild_id == guild_id,
+                Transaction.user_id == user_id,
+                Transaction.type.in_(_EARNING_TYPES),
+                Transaction.game_day < state.game_day,
+            )
+        )
+        if day is None:
+            return None, 0
+        total = await session.scalar(
+            select(func.sum(Transaction.amount)).where(
+                Transaction.guild_id == guild_id,
+                Transaction.user_id == user_id,
+                Transaction.type.in_(_EARNING_TYPES),
+                Transaction.game_day == day,
+            )
+        )
+        return day, int(total or 0)
+
+    def _next_close(self, state) -> str:
+        """The next daily close as a Discord relative timestamp (same pattern
+        as ``$today``): midnight ending the current game day, in the economy's
+        calendar timezone."""
+        zone = gameday.calendar_timezone(
+            getattr(self.bot.settings, "calendar_timezone", None)
+        )
+        close = dt.datetime.combine(
+            state.game_day + dt.timedelta(days=1), dt.time(), tzinfo=zone
+        )
+        return f"<t:{int(close.timestamp())}:R> (<t:{int(close.timestamp())}:F>)"
+
     # -------------------------------------------------------------------
     # $jobs [page]
     # -------------------------------------------------------------------
@@ -68,6 +170,7 @@ class PlayerCog(commands.Cog, name="Player"):
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             listings = await employment.list_open_jobs(session, state)
+            applied = await self._pending_job_ids(session, ctx.author.id)
 
         if not listings:
             await ctx.send(
@@ -93,10 +196,11 @@ class PlayerCog(commands.Cog, name="Player"):
                     f" + {formatting.fmt(job.equity_shares)} sh "
                     f"vesting/{job.vest_days}d"
                 )
+            marker = " **(applied)**" if job.job_id in applied else ""
             lines.append(
                 f"{prefix}{job.company_name} ({job.ticker}) — {job.title} — "
                 f"{formatting.fmt(job.daily_wage)} nug/day{equity} "
-                f"— `$apply {job.job_id}`"
+                f"— `$apply {job.job_id}`{marker}"
             )
 
         emb = discordutil.embed(
@@ -104,6 +208,19 @@ class PlayerCog(commands.Cog, name="Player"):
             "\n".join(lines),
         )
         await ctx.send(embed=emb)
+
+    async def _pending_job_ids(self, session, user_id: int) -> set[int]:
+        """Job ids this player already has a pending application for, so the
+        list can say so instead of letting them re-apply into an error."""
+        rows = (
+            await session.execute(
+                select(Application.job_id).where(
+                    Application.user_id == user_id,
+                    Application.status == "pending",
+                )
+            )
+        ).scalars().all()
+        return {int(j) for j in rows}
 
     # -------------------------------------------------------------------
     # $apply <job_id>
@@ -116,6 +233,7 @@ class PlayerCog(commands.Cog, name="Player"):
             result = await employment.apply_to_job(
                 session, state, ctx.author.id, job_id
             )
+            owner_id = await self._job_owner_id(session, job_id)
 
         if result.auto_accepted:
             await ctx.send(
@@ -128,15 +246,35 @@ class PlayerCog(commands.Cog, name="Player"):
                 )
             )
         else:
+            # Nothing else tells the owner an application is waiting, so ping
+            # them here — the one send that deliberately opts back in to
+            # mentions (the bot suppresses them globally).
+            owner_tag = mention(owner_id) if owner_id else "The owner"
             await ctx.send(
+                f"{owner_tag} — new applicant for **{result.title}** at "
+                f"**{result.ticker}**. Review with `{ctx.prefix}applicants "
+                f"{result.ticker}`.",
                 embed=discordutil.embed(
                     f"{emojis.HIRING} Application filed",
                     f"Applied to **{result.company_name}** ({result.ticker}) — "
                     f"**{result.title}** ({formatting.fmt(result.daily_wage)} "
                     f"nug/day).\nThe owner will review it with "
                     f"`$applicants {result.ticker}`.",
-                )
+                ),
+                allowed_mentions=(
+                    discord.AllowedMentions(users=[discord.Object(id=owner_id)])
+                    if owner_id
+                    else discord.AllowedMentions.none()
+                ),
             )
+
+    async def _job_owner_id(self, session, job_id: int) -> int | None:
+        """The owner of the company posting ``job_id`` (``None`` for state jobs)."""
+        return await session.scalar(
+            select(Company.owner_id)
+            .join(Job, Job.company_id == Company.id)
+            .where(Job.id == job_id)
+        )
 
     # -------------------------------------------------------------------
     # $clockin

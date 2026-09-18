@@ -63,6 +63,21 @@ async def offer(
         raise BadInput("Offer amount is too large to store safely.")
     if acquirer.id == target.id:
         raise BadInput("A company can't acquire itself.")
+    if acquirer.owner_id == target.owner_id:
+        raise NotAllowed(
+            f"You own both **{acquirer.ticker}** and **{target.ticker}** — "
+            "a company can't acquire another company owned by the same player. "
+            "Self-dealing would let you buy out your own investors at a price "
+            "you set."
+        )
+    # Floor the price at the target's cash on hand: the acquirer absorbs that
+    # treasury on close, so anything less cashes the target's shareholders out
+    # below book value.
+    if amount < target.treasury:
+        raise BadInput(
+            f"**{target.ticker}** is holding {fmt(target.treasury)} nug in cash — "
+            f"an offer must be at least that much (you offered {fmt(amount)} nug)."
+        )
     if acquirer.treasury < amount:
         raise InsufficientFunds(
             f"**{acquirer.ticker}**'s treasury holds {fmt(acquirer.treasury)} nug — "
@@ -123,6 +138,12 @@ async def _find_open_offer(
         .join(target, Offer.target_id == target.id)
         .where(
             Offer.status == "open",
+            # §16: guild filter at every lookup boundary. Company ids and
+            # tickers are only unique *within* a guild, so without these an
+            # $accept in guild A could resolve — and settle — an offer between
+            # two companies in guild B.
+            acquirer.guild_id == state.guild_id,
+            target.guild_id == state.guild_id,
             func.upper(acquirer.ticker) == ticker_norm,
             target.active == True,  # noqa: E712
             target.owner_id == target_owner_id,
@@ -202,6 +223,15 @@ async def accept(
         raise InsufficientFunds(
             f"**{acquirer.ticker}**'s treasury holds {fmt(acquirer.treasury)} nug — "
             f"no longer enough to honor its {fmt(offer_row.amount)} nug offer."
+        )
+    # Re-check the book-value floor at acceptance, not just at offer time: the
+    # target can deposit into its treasury after the offer, which would
+    # otherwise let its own shareholders be cashed out below cash on hand.
+    if offer_row.amount < target.treasury:
+        raise BadInput(
+            f"**{target.ticker}** is holding {fmt(target.treasury)} nug in cash — "
+            f"an offer must be at least that much (you offered "
+            f"{fmt(offer_row.amount)} nug)."
         )
 
     amount = offer_row.amount

@@ -49,16 +49,45 @@ def test_industries_field_lists_every_industry_with_emoji():
 
 
 def test_landing_embed_lists_all_commands():
-    embed = help_menu.build_landing_embed("$")
+    embed = help_menu.build_landing_embed("$", accelerated=True)
     text = embed.description + "\n" + "\n".join(f.value for f in embed.fields)
     # Every catalogued command appears in the menu.
     for name in help_menu.SUMMARY:
-        assert f"$" + name in text
+        assert "$" + name in text
     # The quick-start path is present.
     assert "New here" in embed.description
     assert "$jobs" in embed.description and "$found" in embed.description
     # All five categories rendered.
     assert len(embed.fields) == len(help_menu.CATEGORIES)
+
+
+def test_landing_embed_hides_testing_commands_outside_accelerated_mode():
+    """`$setday`/`$forcetick` refuse to run on a wall-clock server, so the
+    landing page must not advertise them there."""
+    normal = help_menu.build_landing_embed("$")
+    text = "\n".join(f.value for f in normal.fields)
+    for name in help_menu.ACCELERATED_ONLY:
+        assert "$" + name not in text
+    # The rest of the Manager section survives.
+    assert "$print" in text and "$taxrate" in text and "$stats" in text
+    # Every other catalogued command is still listed.
+    for name in help_menu.SUMMARY:
+        if name in help_menu.ACCELERATED_ONLY:
+            continue
+        assert "$" + name in normal.description + "\n" + text
+
+
+async def test_help_landing_follows_settings_accelerated_mode():
+    """The live help command reads ``bot.settings.accelerated_mode``."""
+    h = await Harness.create()
+    try:
+        h.bot.settings.accelerated_mode = True
+        assert "$forcetick" in (await h.invoke_help(h.ctx(1))).last_text()
+
+        h.bot.settings.accelerated_mode = False
+        assert "$forcetick" not in (await h.invoke_help(h.ctx(1))).last_text()
+    finally:
+        await h.close()
 
 
 def test_command_embed_has_usage_aliases_and_context():

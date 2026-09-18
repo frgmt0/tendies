@@ -13,6 +13,7 @@ optional ``rng`` so the tick is deterministically testable.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import random
 from dataclasses import dataclass
 
@@ -21,10 +22,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import emojis
 from .config import INDUSTRIES, MAX_EVENTS_PER_WEEK
+from .errors import BadInput
 from .models import Event, ServerState
 
 #: industry value used for a server-wide event (hits every sector).
 MARKET_WIDE = "all"
+
+#: §5 ceiling on a single event multiplier, and the clamp applied to the
+#: *combined* multiplier for a day so stacked events can't compound without
+#: bound in either direction.
+MAX_EVENT_MULTIPLIER = 100.0
+MIN_COMBINED_MULTIPLIER = 0.01
+MAX_COMBINED_MULTIPLIER = 100.0
+
+
+def _clamp(mult: float) -> float:
+    """Clamp a combined day/industry multiplier into the sane band."""
+    if not math.isfinite(mult) or mult <= 0:
+        return MIN_COMBINED_MULTIPLIER
+    return min(MAX_COMBINED_MULTIPLIER, max(MIN_COMBINED_MULTIPLIER, mult))
 
 
 @dataclass(frozen=True)
@@ -124,8 +140,38 @@ async def create_admin_event(
     multiplier: float,
     blurb: str,
 ) -> Event:
-    """Fire an admin event for the current game day. ``industry`` should be a
-    canonical industry or ``MARKET_WIDE``; the cog validates input first."""
+    """Fire an admin event for the current game day (§5).
+
+    Validates the multiplier here rather than trusting the cog, and *replaces*
+    any existing admin event for the same ``(game_day, industry)`` instead of
+    stacking a second one — ten ``$event tech 100`` calls used to multiply out
+    to 100^10.
+    """
+    if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+        raise BadInput("Event multiplier must be a number.")
+    multiplier = float(multiplier)
+    if not math.isfinite(multiplier) or multiplier <= 0:
+        raise BadInput("Event multiplier must be a finite number greater than 0.")
+    if multiplier > MAX_EVENT_MULTIPLIER:
+        raise BadInput(
+            f"Event multiplier can't exceed {MAX_EVENT_MULTIPLIER:g}×."
+        )
+
+    existing = (
+        await session.execute(
+            select(Event).where(
+                Event.guild_id == state.guild_id,
+                Event.game_day == state.game_day,
+                Event.industry == industry,
+                Event.source == "admin",
+            )
+        )
+    ).scalars().all()
+    for old_event in existing:
+        await session.delete(old_event)
+    if existing:
+        await session.flush()
+
     event = Event(
         guild_id=state.guild_id,
         game_day=state.game_day,
@@ -164,7 +210,7 @@ async def active_multiplier(
     for event in await _events_on(session, guild_id, game_day):
         if event.industry == industry or event.industry == MARKET_WIDE:
             mult *= event.multiplier
-    return mult
+    return _clamp(mult)
 
 
 async def active_multipliers(
@@ -179,7 +225,7 @@ async def active_multipliers(
                 result[ind] *= event.multiplier
         elif event.industry in result:
             result[event.industry] *= event.multiplier
-    return result
+    return {ind: _clamp(mult) for ind, mult in result.items()}
 
 
 async def events_for_week(
