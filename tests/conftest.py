@@ -110,7 +110,7 @@ class World:
         await self.session.flush()
 
     async def tick(self, *, rng=None) -> tick.TickReport:
-        """Run exactly one daily tick (advances the day, then produces)."""
+        """Settle the current day, then advance the calendar by one date."""
         report = await tick.run_tick(self.session, self.state, rng=rng)
         await self.session.flush()
         return report

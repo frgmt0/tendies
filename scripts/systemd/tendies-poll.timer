@@ -1,0 +1,11 @@
+[Unit]
+Description=Check tendies main for a verified deployment
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=45s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

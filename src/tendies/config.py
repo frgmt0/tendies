@@ -209,9 +209,14 @@ class Settings:
     command_prefix: str
     manager_role: str
     tick_interval_seconds: int
+    calendar_timezone: str | None = None
+    accelerated_mode: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
+        game_time_mode = os.getenv("GAME_TIME_MODE", "calendar").strip().lower()
+        if game_time_mode not in {"calendar", "accelerated"}:
+            raise ValueError("GAME_TIME_MODE must be 'calendar' or 'accelerated'.")
         return cls(
             discord_token=os.getenv("DISCORD_TOKEN", ""),
             database_url=os.getenv(
@@ -220,6 +225,8 @@ class Settings:
             command_prefix=os.getenv("COMMAND_PREFIX", "$"),
             manager_role=os.getenv("MANAGER_ROLE", "Tendies Manager"),
             tick_interval_seconds=int(os.getenv("TICK_INTERVAL_SECONDS", "86400")),
+            calendar_timezone=os.getenv("GAME_TIMEZONE") or None,
+            accelerated_mode=game_time_mode == "accelerated",
         )
 
 

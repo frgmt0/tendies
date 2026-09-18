@@ -69,6 +69,11 @@ async def test_earner_clears_gate_and_invests(world):
         await w.tick()
         business_ticks += 1
 
+    # The thirtieth close leaves the cursor on Saturday.  Catch the calendar up
+    # to Monday before attempting a market action; weekend closes add no pay.
+    while not gameday.is_business_day(state.game_day):
+        await w.tick()
+
     trailing = await trailing_income(
         w.session, state.guild_id, EARNER, state.game_day, INCOME_WINDOW_DAYS
     )

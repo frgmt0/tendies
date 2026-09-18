@@ -9,13 +9,17 @@ doesn't reinvent them. Services never import this module; it's the Discord edge.
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 
 import discord
 from discord.ext import commands
 
 from .errors import BadInput
+from .money import MAX_INT64
 
 NUGGIE_GOLD = 0xF1C40F
+EMBED_TITLE_LIMIT = 256
+EMBED_DESCRIPTION_LIMIT = 4096
 
 _AMOUNT_SUFFIXES = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000, "T": 1_000_000_000_000}
 
@@ -53,9 +57,16 @@ def parse_amount(text: str) -> int:
             f"Couldn't read **{text}** as an amount. Try `5000`, `1.5M`, or `200B`."
         )
 
-    amount = int(round(float(token) * multiplier))
+    try:
+        amount = int(
+            (Decimal(token) * multiplier).to_integral_value(rounding=ROUND_HALF_EVEN)
+        )
+    except (InvalidOperation, ValueError, OverflowError):
+        raise BadInput(f"Couldn't read **{text}** as a finite amount.")
     if amount <= 0:
         raise BadInput("Amount must be positive.")
+    if amount > MAX_INT64:
+        raise BadInput("Amount is too large to store safely.")
     return amount
 
 
@@ -64,7 +75,12 @@ def mention(user_id: int) -> str:
 
 
 def embed(title: str, description: str | None = None, *, color: int = NUGGIE_GOLD) -> discord.Embed:
-    return discord.Embed(title=title, description=description or "", color=color)
+    safe_title = title[:EMBED_TITLE_LIMIT]
+    safe_description = description or ""
+    if len(safe_description) > EMBED_DESCRIPTION_LIMIT:
+        safe_description = safe_description[: EMBED_DESCRIPTION_LIMIT - 24].rstrip()
+        safe_description += "\n… additional rows omitted"
+    return discord.Embed(title=safe_title, description=safe_description, color=color)
 
 
 def is_manager(ctx: commands.Context) -> bool:

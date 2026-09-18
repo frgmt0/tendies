@@ -112,6 +112,7 @@ class FakeSettings:
     def __init__(self, manager_role: str = "Tendies Manager", prefix: str = "$"):
         self.manager_role = manager_role
         self.command_prefix = prefix
+        self.accelerated_mode = True
 
 
 class FakeBot:

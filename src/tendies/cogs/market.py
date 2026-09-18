@@ -2,7 +2,7 @@
 
 This slice reads the engine directly — there is no service file. Four commands:
 
-* ``$market`` / ``$stocks`` — the stock exchange table (prices, today's move,
+* ``$market`` / ``$stocks`` — the valuation table (prices, today's move,
   industry sentiment). Frozen on weekends.
 * ``$leaderboard`` / ``$rich`` — players ranked by real net worth.
 * ``$pool`` — the server treasury / money-supply snapshot.
@@ -35,8 +35,8 @@ class Market(commands.Cog):
 
     # ------------------------------------------------------------------ market
     @commands.command(name="market", aliases=["stocks"])
-    async def market(self, ctx: commands.Context) -> None:
-        """The Nuggie Exchange — share prices, today's move, sentiment (§13)."""
+    async def market(self, ctx: commands.Context, page: int = 1) -> None:
+        """Company valuations — share prices, today's move, sentiment (§13)."""
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             rows = await valuation.market_table(session, state)
@@ -58,7 +58,7 @@ class Market(commands.Cog):
                         for ind, mult in active
                     ) + " today)"
 
-        header = f"{emojis.STOCK_UP} The Nuggie Exchange — {weekday}{note}"
+        header = f"{emojis.STOCK_UP} Company valuations — {weekday}{note}"
 
         if not open_market:
             body = (
@@ -69,12 +69,16 @@ class Market(commands.Cog):
 
         if not rows:
             desc = (
-                f"{body}No companies are trading yet. "
+                f"{body}No private companies yet. "
                 f"Found one with `{ctx.prefix}found`."
             )
             await ctx.send(embed=discordutil.embed(header, desc))
             return
 
+        pages = max(1, (len(rows) + 19) // 20)
+        page = max(1, min(page, pages))
+        rows = rows[(page - 1) * 20:page * 20]
+        body += f"Page {page}/{pages} · use `{ctx.prefix}market <page>`\n"
         # Build a monospace table for alignment.
         lines = ["TICKER  PRICE(real)        Δ today     INDUSTRY"]
         for v in rows:
@@ -205,6 +209,13 @@ class Market(commands.Cog):
                 "acquisition offers.",
             ]
 
+        if getattr(self.bot.settings, "accelerated_mode", False):
+            lines.append("Accelerated development calendar.")
+        else:
+            zone = gameday.calendar_timezone(getattr(self.bot.settings, "calendar_timezone", None))
+            close = dt.datetime.combine(state.game_day + dt.timedelta(days=1), dt.time(), tzinfo=zone)
+            lines.append(f"Date: **{state.game_day.isoformat()}** · server timezone **{zone.key}**")
+            lines.append(f"Next day boundary: <t:{int(close.timestamp())}:F> (<t:{int(close.timestamp())}:R>).")
         await ctx.send(embed=discordutil.embed("📅 Game Calendar", "\n".join(lines)))
 
 

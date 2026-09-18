@@ -1,5 +1,5 @@
-"""Valuation and net worth (§13). Everything here is computed on read; nothing
-is stored.
+"""Valuation and net worth (§13). Live business-day values are computed on read;
+business-day closing quotes are retained for daily moves and weekends.
 
     avg_daily_revenue = mean realized daily revenue over last 10 business days
     annual_revenue    = avg_daily_revenue * 250
@@ -8,11 +8,9 @@ is stored.
     share_price       = real_value / total_shares
     net_worth         = wallet + Σ(shares_held * share_price)            (all real)
 
-``sentiment`` is the company's industry multiplier for the day (1.0 normally,
-the event multiplier on an event day). "Δ today" isolates the day's sentiment
-move — today's price vs. the same company priced at the previous business day's
-sentiment — which is what makes events the day-trader's signal. Prices freeze on
-weekends (``frozen`` true → sentiment 1.0, delta 0).
+``sentiment`` is the industry's event multiplier. Daily movement compares with
+an actual prior closing quote. Weekends retain the last business-day close;
+new weekend companies without a close show their initial valuation.
 """
 
 from __future__ import annotations
@@ -26,7 +24,7 @@ from . import events as events_mod
 from . import gameday
 from . import money
 from .config import AVG_REVENUE_WINDOW_DAYS, BUSINESS_DAYS_PER_YEAR, REVENUE_MULTIPLE
-from .models import Company, Holding, ServerState, User
+from .models import Company, Holding, MarketClose, ServerState, User
 
 
 @dataclass
@@ -91,6 +89,23 @@ async def company_valuation(
     """Value one company. ``sentiment``/``prev_sentiment`` may be supplied to
     avoid repeated event lookups in batch callers; otherwise they're queried."""
     frozen = not gameday.is_business_day(state.game_day)
+    previous = (await session.execute(
+        select(MarketClose).where(
+            MarketClose.company_id == company.id,
+            MarketClose.game_day < state.game_day,
+        ).order_by(MarketClose.game_day.desc()).limit(1)
+    )).scalars().first()
+    if frozen and previous is not None:
+        return CompanyValuation(
+            company_id=company.id, ticker=company.ticker, name=company.name,
+            industry=company.industry, treasury=previous.treasury,
+            total_shares=previous.total_shares,
+            avg_daily_revenue=previous.avg_daily_revenue,
+            annual_revenue=previous.avg_daily_revenue * BUSINESS_DAYS_PER_YEAR,
+            sentiment=previous.sentiment, nominal_value=previous.nominal_value,
+            real_value=previous.real_value, share_price=previous.share_price,
+            delta_today=0.0, frozen=True,
+        )
 
     if sentiment is None:
         sentiment = (
@@ -120,9 +135,10 @@ async def company_valuation(
 
     if frozen:
         delta = 0.0
+    elif previous is not None and previous.share_price > 0:
+        delta = share_price / previous.share_price - 1.0
     else:
-        prev_val = _value_at(company.treasury, annual_rev, prev_sentiment)
-        delta = (nominal / prev_val - 1.0) if prev_val > 0 else 0.0
+        delta = 0.0  # A newly founded company has no previous closing quote.
 
     return CompanyValuation(
         company_id=company.id,
@@ -182,6 +198,23 @@ async def valuation_map(
             prev_sentiment=prev_sentiment,
         )
     return result
+
+
+async def record_closes(session: AsyncSession, state: ServerState) -> None:
+    """Snapshot after payroll, before advancing the settled business date."""
+    await session.flush()
+    for company in await _active_private_companies(session, state.guild_id):
+        if await session.get(MarketClose, (company.id, state.game_day)) is not None:
+            continue
+        val = await company_valuation(session, state, company)
+        session.add(MarketClose(
+            company_id=company.id, game_day=state.game_day,
+            treasury=val.treasury, total_shares=val.total_shares,
+            avg_daily_revenue=val.avg_daily_revenue, sentiment=val.sentiment,
+            nominal_value=val.nominal_value, real_value=val.real_value,
+            share_price=val.share_price,
+        ))
+    await session.flush()
 
 
 async def market_table(

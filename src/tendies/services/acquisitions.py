@@ -20,10 +20,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from .. import lifecycle, lookups, money
-from ..errors import BadInput, GameError, InsufficientFunds, NotFound
+from .. import gameday, lifecycle, lookups, money
+from ..errors import BadInput, GameError, InsufficientFunds, NotAllowed, NotFound
 from ..formatting import fmt
-from ..models import Company, Offer, ServerState, treasury_acct
+from ..models import Company, Employment, Offer, ServerState, treasury_acct
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +57,10 @@ async def offer(
         session, state.guild_id, target_ticker, private_only=True
     )
 
-    if amount <= 0:
-        raise BadInput("Offer amount must be positive.")
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+        raise BadInput("Offer amount must be a positive whole number.")
+    if amount > money.MAX_INT64:
+        raise BadInput("Offer amount is too large to store safely.")
     if acquirer.id == target.id:
         raise BadInput("A company can't acquire itself.")
     if acquirer.treasury < amount:
@@ -106,6 +108,7 @@ async def _find_open_offer(
     state: ServerState,
     target_owner_id: int,
     acquirer_ticker: str,
+    target_ticker: str | None = None,
 ) -> tuple[Offer, Company, Company]:
     """Resolve the open offer where the acquirer has ``acquirer_ticker`` and the
     target is active and owned by ``target_owner_id``. Raises :class:`NotFound`
@@ -114,29 +117,32 @@ async def _find_open_offer(
     target = aliased(Company)
     ticker_norm = (acquirer_ticker or "").strip().upper()
 
-    rows = (
-        await session.execute(
-            select(Offer, acquirer, target)
-            .join(acquirer, Offer.acquirer_id == acquirer.id)
-            .join(target, Offer.target_id == target.id)
-            .where(
-                Offer.status == "open",
-                func.upper(acquirer.ticker) == ticker_norm,
-                target.active == True,  # noqa: E712
-                target.owner_id == target_owner_id,
-            )
+    stmt = (
+        select(Offer, acquirer, target)
+        .join(acquirer, Offer.acquirer_id == acquirer.id)
+        .join(target, Offer.target_id == target.id)
+        .where(
+            Offer.status == "open",
+            func.upper(acquirer.ticker) == ticker_norm,
+            target.active == True,  # noqa: E712
+            target.owner_id == target_owner_id,
         )
-    ).all()
+    )
+    target_norm = (target_ticker or "").strip().upper()
+    if target_ticker is not None:
+        stmt = stmt.where(func.upper(target.ticker) == target_norm)
+    rows = (await session.execute(stmt)).all()
 
     if not rows:
         raise NotFound(
-            f"No open offer from **{ticker_norm}** for a company you own."
+            f"No open offer from **{ticker_norm}**"
+            + (f" for **{target_norm}**." if target_ticker is not None else " for a company you own.")
         )
     if len(rows) > 1:
         targets = ", ".join(sorted(t.ticker for _, _, t in rows))
         raise GameError(
-            f"**{ticker_norm}** has open offers for more than one of your companies "
-            f"({targets}). This shouldn't normally happen — contact a Manager."
+            f"**{ticker_norm}** has offers for more than one company you own "
+            f"({targets}). Choose one with `$accept {ticker_norm} <target>`."
         )
 
     offer_row, acquirer_co, target_co = rows[0]
@@ -163,12 +169,34 @@ async def accept(
     state: ServerState,
     target_owner_id: int,
     acquirer_ticker: str,
+    target_ticker: str | None = None,
 ) -> AcceptResult:
     """Accept an open offer (caller is the target owner). Executes the M&A close
     in the load-bearing order from §14."""
+    if not gameday.is_business_day(state.game_day):
+        raise NotAllowed(
+            "Financial operations are closed for the weekend. Try again Monday."
+        )
     offer_row, acquirer, target = await _find_open_offer(
-        session, state, target_owner_id, acquirer_ticker
+        session, state, target_owner_id, acquirer_ticker, target_ticker
     )
+
+    clocked_in = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Employment)
+            .where(
+                Employment.company_id == target.id,
+                Employment.clocked_in == True,  # noqa: E712
+            )
+        )
+        or 0
+    )
+    if clocked_in:
+        raise NotAllowed(
+            f"**{target.ticker}** has {clocked_in} employee(s) clocked in. "
+            "Finish today's tick before closing the acquisition so earned payroll is honored."
+        )
 
     if acquirer.treasury < offer_row.amount:
         raise InsufficientFunds(
@@ -180,6 +208,8 @@ async def accept(
 
     # 1) Pay the offer pro-rata to the target's entire cap table (taxed).
     holders = await lifecycle.cap_table(session, target)
+    if not holders:
+        raise GameError(f"**{target.ticker}** has no shareholders to pay.")
     payouts = await money.payout_prorata(
         session, state, acquirer, holders, amount, state.game_day, tx_type="acquisition"
     )
@@ -187,6 +217,8 @@ async def accept(
     # 2) Absorb the target's treasury into the acquirer.
     treasury_absorbed = target.treasury
     if treasury_absorbed > 0:
+        if acquirer.treasury > money.MAX_INT64 - treasury_absorbed:
+            raise BadInput("The combined treasury is too large to store safely.")
         acquirer.treasury += treasury_absorbed
         target.treasury = 0
         money.record_tx(
@@ -207,6 +239,7 @@ async def accept(
     # 4) Mark the offer accepted and void any other offers involving the target.
     offer_row.status = "accepted"
     await lifecycle.void_offers_involving(session, target)
+    await lifecycle.close_funding_rounds(session, target)
 
     # 5) Lay off all of the target's employees (forfeiting unvested grants).
     employees_laid_off = await lifecycle.end_all_employment(session, target)
@@ -238,9 +271,10 @@ async def decline(
     state: ServerState,
     target_owner_id: int,
     acquirer_ticker: str,
+    target_ticker: str | None = None,
 ) -> None:
     """Decline an open offer (caller is the target owner)."""
     offer_row, _acquirer, _target = await _find_open_offer(
-        session, state, target_owner_id, acquirer_ticker
+        session, state, target_owner_id, acquirer_ticker, target_ticker
     )
     offer_row.status = "declined"

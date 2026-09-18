@@ -11,6 +11,7 @@ player-facing messages.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +105,8 @@ async def found_company(
     )
     owned = int(owned or 0)
     fee = int(state.base_founding_fee * (state.fee_multiplier ** owned))
+    if fee > money.MAX_INT64:
+        raise BadInput("The founding fee is too large to store safely.")
 
     user = await money.get_or_create_user(session, state.guild_id, owner_id)
     if user.wallet < fee:
@@ -239,10 +242,16 @@ async def post_job(
     if not title_clean:
         raise BadInput("A job needs a title.")
 
-    if daily_wage <= 0:
-        raise BadInput("Daily wage must be a positive number of nuggies.")
-    if equity_shares < 0:
-        raise BadInput("Equity shares can't be negative.")
+    if isinstance(daily_wage, bool) or not isinstance(daily_wage, int) or daily_wage <= 0:
+        raise BadInput("Daily wage must be a positive whole number of nuggies.")
+    if daily_wage > money.MAX_INT64:
+        raise BadInput("Daily wage is too large to store safely.")
+    if isinstance(equity_shares, bool) or not isinstance(equity_shares, int) or equity_shares < 0:
+        raise BadInput("Equity shares must be a non-negative whole number.")
+    if equity_shares > money.MAX_INT64:
+        raise BadInput("Equity grant is too large to store safely.")
+    if isinstance(vest_days, bool) or not isinstance(vest_days, int):
+        raise BadInput("Vesting period must be a whole number of business days.")
     if equity_shares > 0 and vest_days <= 0:
         raise BadInput("An equity grant needs a positive vesting period (in business days).")
 
@@ -366,10 +375,14 @@ async def hire(
     application = await session.get(Application, application_id)
     if application is None:
         raise NotFound(f"No application #{application_id}.")
+    if application.status != "pending":
+        raise BadInput(f"Application #{application_id} is no longer pending.")
 
     job = await session.get(Job, application.job_id)
     if job is None or job.company_id != company.id:
         raise NotFound(f"Application #{application_id} isn't for **{company.ticker}**.")
+    if not job.open:
+        raise BadInput(f"The **{job.title}** role is closed.")
 
     # The applicant must be currently unemployed.
     existing = await lookups.get_employment(session, state.guild_id, application.user_id)
@@ -450,6 +463,12 @@ async def fire(
             f"No one with that user works at **{company.ticker}**."
         )
 
+    if employment.clocked_in:
+        raise NotAllowed(
+            "That employee is clocked in today. Finish today's tick before firing "
+            "them so earned payroll is honored."
+        )
+
     await session.delete(employment)
     await session.flush()
 
@@ -478,7 +497,7 @@ async def promote(
     treasury at the new rate from the next tick. Raises are positive; the new
     wage must round up to a real increase.
     """
-    if pct <= 0:
+    if not math.isfinite(pct) or pct <= 0:
         raise BadInput("A raise has to be a positive percentage, e.g. `10` for +10%.")
     if pct > 1000:
         raise BadInput("That's an absurd raise (max 1000%). Pick a smaller number.")
@@ -494,6 +513,8 @@ async def promote(
 
     old_wage = employment.daily_wage
     new_wage = int(round(old_wage * (1 + pct / 100)))
+    if new_wage > money.MAX_INT64:
+        raise BadInput("That raise would make the wage too large to store safely.")
     if new_wage <= old_wage:
         raise BadInput(
             "That raise rounds to no change at this wage — bump the percentage."

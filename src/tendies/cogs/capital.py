@@ -4,7 +4,9 @@ Thin Discord edge over :mod:`tendies.services.investment` and
 :mod:`tendies.services.acquisitions`:
 
 * ``$raise``    — open a funding round.
+* ``$closeround`` — owner/Manager closes an incomplete funding round.
 * ``$invest``   — fill a round (gated on annualized income).
+* ``$deposit``  — owner moves wallet funds into company treasury.
 * ``$dividend`` — owner pays a pro-rata dividend from treasury.
 * ``$acquire``  — send a company-to-company acquisition offer.
 * ``$accept`` / ``$decline`` — the target owner answers an offer.
@@ -22,6 +24,8 @@ from .. import discordutil, emojis, lookups
 from ..discordutil import parse_amount
 from ..formatting import fmt
 from ..services import acquisitions, investment
+
+DISPLAY_ROWS = 20
 
 
 class CapitalCog(commands.Cog, name="Capital"):
@@ -58,6 +62,27 @@ class CapitalCog(commands.Cog, name="Capital"):
             )
         )
 
+    @commands.command(name="closeround")
+    async def close_round(self, ctx: commands.Context, ticker: str) -> None:
+        """Close an incomplete funding round: $closeround <ticker>."""
+        async with self.bot.db.session() as session:
+            state = await lookups.get_state(session, ctx.guild.id)
+            result = await investment.close_round(
+                session,
+                state,
+                ctx.author.id,
+                ticker,
+                manager=discordutil.is_manager(ctx),
+            )
+        await ctx.send(
+            embed=discordutil.embed(
+                f"🔒 {result.ticker} funding round closed",
+                f"Raised **{fmt(result.amount_raised)} / {fmt(result.target_amount)} nug** "
+                f"and minted **{fmt(result.shares_minted)} shares**. Existing "
+                "investments remain in place.",
+            )
+        )
+
     # -------------------------------------------------------------------
     # $invest <ticker> <amount>
     # -------------------------------------------------------------------
@@ -85,6 +110,23 @@ class CapitalCog(commands.Cog, name="Capital"):
             embed=discordutil.embed(f"{emojis.STOCK_UP} Invested in {result.ticker}", desc)
         )
 
+    @commands.command(name="deposit")
+    async def deposit(self, ctx: commands.Context, ticker: str, amount: str) -> None:
+        """Move your wallet funds into your company: $deposit <ticker> <amount>."""
+        nuggies = parse_amount(amount)
+        async with self.bot.db.session() as session:
+            state = await lookups.get_state(session, ctx.guild.id)
+            result = await investment.deposit(
+                session, state, ctx.author.id, ticker, nuggies
+            )
+        await ctx.send(
+            embed=discordutil.embed(
+                f"{emojis.TREASURY_POOL} Deposited into {result.ticker}",
+                f"Moved **{fmt(result.amount)} nug** from your wallet into the "
+                f"company treasury. Treasury: **{fmt(result.treasury_after)} nug**.",
+            )
+        )
+
     # -------------------------------------------------------------------
     # $dividend <ticker> <amount>
     # -------------------------------------------------------------------
@@ -103,11 +145,13 @@ class CapitalCog(commands.Cog, name="Capital"):
             f"**{result.ticker}** paid a {fmt(result.amount)} nug dividend across "
             f"{fmt(total_shares)} sh ({result.per_share:.2f}/sh)."
         ]
-        for p in result.payouts:
+        for p in result.payouts[:DISPLAY_ROWS]:
             lines.append(
                 f"  {discordutil.mention(p.user_id)} ({fmt(p.shares)} sh) → "
                 f"{fmt(p.gross)} (−{fmt(p.tax)} tax) = {fmt(p.net)} nug"
             )
+        if len(result.payouts) > DISPLAY_ROWS:
+            lines.append(f"  … and {len(result.payouts) - DISPLAY_ROWS} more shareholders")
         lines.append(f"Tax → pool: {fmt(result.total_tax)} nug.")
         await ctx.send(
             embed=discordutil.embed(f"{emojis.DIVIDEND} Dividend paid", "\n".join(lines))
@@ -132,7 +176,8 @@ class CapitalCog(commands.Cog, name="Capital"):
             f"**{result.acquirer_ticker}** offers **{fmt(result.amount)} nug** to "
             f"acquire **{result.target_ticker}**.\n"
             f"{discordutil.mention(result.target_owner_id)}: "
-            f"`$accept {result.acquirer_ticker}` or `$decline {result.acquirer_ticker}`."
+            f"`$accept {result.acquirer_ticker} {result.target_ticker}` or "
+            f"`$decline {result.acquirer_ticker} {result.target_ticker}`."
         )
         await ctx.send(
             embed=discordutil.embed(f"{emojis.ACQUISITION} Acquisition offer", desc)
@@ -142,23 +187,29 @@ class CapitalCog(commands.Cog, name="Capital"):
     # $accept <acquirer>
     # -------------------------------------------------------------------
     @commands.command(name="accept")
-    async def accept(self, ctx: commands.Context, acquirer: str) -> None:
-        """Accept an acquisition offer (target owner): $accept <acquirer>."""
+    async def accept(
+        self, ctx: commands.Context, acquirer: str, target: str | None = None
+    ) -> None:
+        """Accept an offer: $accept <acquirer> [target]."""
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
-            result = await acquisitions.accept(session, state, ctx.author.id, acquirer)
+            result = await acquisitions.accept(
+                session, state, ctx.author.id, acquirer, target
+            )
 
         lines = [
             f"Deal closed. **{result.acquirer_ticker}** acquires "
             f"**{result.target_ticker}** for {fmt(result.amount)} nug.",
             "Cap table paid out:",
         ]
-        for user_id, gross, tax in result.payouts:
+        for user_id, gross, tax in result.payouts[:DISPLAY_ROWS]:
             share_pct = (gross / result.amount * 100) if result.amount > 0 else 0.0
             lines.append(
                 f"  {discordutil.mention(user_id)} ({share_pct:.0f}%) → "
                 f"{fmt(gross)} nug (−{fmt(tax)} tax)"
             )
+        if len(result.payouts) > DISPLAY_ROWS:
+            lines.append(f"  … and {len(result.payouts) - DISPLAY_ROWS} more shareholders")
 
         absorbed = (
             f"**{result.target_ticker}**'s treasury "
@@ -183,11 +234,15 @@ class CapitalCog(commands.Cog, name="Capital"):
     # $decline <acquirer>
     # -------------------------------------------------------------------
     @commands.command(name="decline")
-    async def decline(self, ctx: commands.Context, acquirer: str) -> None:
-        """Decline an acquisition offer (target owner): $decline <acquirer>."""
+    async def decline(
+        self, ctx: commands.Context, acquirer: str, target: str | None = None
+    ) -> None:
+        """Decline an offer: $decline <acquirer> [target]."""
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
-            await acquisitions.decline(session, state, ctx.author.id, acquirer)
+            await acquisitions.decline(
+                session, state, ctx.author.id, acquirer, target
+            )
         await ctx.send(
             embed=discordutil.embed(
                 "🚫 Offer declined",

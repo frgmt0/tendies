@@ -27,7 +27,6 @@ from ..models import (
     Company,
     Employment,
     EquityGrant,
-    Holding,
     Job,
     PlayerProfile,
     ServerState,
@@ -392,6 +391,11 @@ async def employment_summary(
 ) -> EmploymentInfo:
     """The user's employment with its vesting breakdown (vested / unvested)."""
     employment = await _resolve_employment(session, state, user_id, ticker)
+    if employment.clocked_in:
+        raise GameError(
+            "You're clocked in today. Finish today's tick before quitting so your "
+            "earned wage is paid, or `$clockout` first to forfeit today's shift."
+        )
     company = await session.get(Company, employment.company_id)
     job = await session.get(Job, employment.job_id)
 
@@ -443,6 +447,11 @@ async def quit_job(
     """Leave a job. Vested shares already live in holdings and are kept; unvested
     grant shares are forfeited. Deletes the employment and its grant."""
     employment = await _resolve_employment(session, state, user_id, ticker)
+    if employment.clocked_in:
+        raise GameError(
+            "You're clocked in today. Finish today's tick before quitting so your "
+            "earned wage is paid, or `$clockout` first to forfeit today's shift."
+        )
     company = await session.get(Company, employment.company_id)
     company_name = company.name if company else ""
     company_ticker = company.ticker if company else ""

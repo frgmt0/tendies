@@ -7,6 +7,9 @@ Game-time is a real ``date`` stored per guild. Monday–Friday are business days
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
+
+from tzlocal import get_localzone
 
 #: index 0..6 -> name, matching ``date.weekday()`` (Monday == 0).
 WEEKDAYS: tuple[str, ...] = (
@@ -18,6 +21,31 @@ WEEKDAYS: tuple[str, ...] = (
     "saturday",
     "sunday",
 )
+
+
+def calendar_timezone(name: str | None = None) -> ZoneInfo:
+    """Return the configured IANA zone, or the host's actual local zone.
+
+    ``datetime.now().astimezone().tzinfo`` can be a fixed UTC offset on some
+    systems, which silently drifts by an hour after a DST transition.  tzlocal
+    resolves the host's IANA zone instead, preserving its transition rules.
+    """
+    return ZoneInfo(name) if name else get_localzone()
+
+
+def local_now(name: str | None = None) -> dt.datetime:
+    """Current wall-clock time in the economy's calendar zone."""
+    return dt.datetime.now(calendar_timezone(name))
+
+
+def local_date(name: str | None = None) -> dt.date:
+    """Current wall-clock date in the economy's calendar zone."""
+    return local_now(name).date()
+
+
+def week_monday(day: dt.date) -> dt.date:
+    """The Monday belonging to ``day``'s calendar week."""
+    return day - dt.timedelta(days=day.weekday())
 
 
 def weekday_name(day: dt.date) -> str:

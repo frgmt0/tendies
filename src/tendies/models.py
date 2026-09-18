@@ -132,6 +132,21 @@ class Company(Base):
     )
 
 
+class MarketClose(Base):
+    """Immutable business-day quotes for honest daily moves and weekend prices."""
+
+    __tablename__ = "market_closes"
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), primary_key=True)
+    game_day: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    treasury: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    avg_daily_revenue: Mapped[float] = mapped_column(Float, nullable=False)
+    sentiment: Mapped[float] = mapped_column(Float, nullable=False)
+    nominal_value: Mapped[float] = mapped_column(Float, nullable=False)
+    real_value: Mapped[float] = mapped_column(Float, nullable=False)
+    share_price: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class Holding(Base):
     """Outright, vested equity. Dividends, acquisitions, and net worth all read
     this one table — every payout is the same pro-rata operation over it."""

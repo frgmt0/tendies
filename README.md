@@ -1,149 +1,173 @@
 # Tendies 🍗
 
-Tendies is a per-server Discord economy bot: a self-contained capitalist sandbox where every guild runs its own independent economy denominated in **nuggies** (`nug`). Players spawn broke, grind always-open state jobs, found companies, hire and fire each other, raise capital, trade equity, pay dividends, and acquire rivals — while the server's moderators act as a combined central bank and treasury (printing money, setting taxes, firing market events). Nothing crosses server boundaries; each guild is its own little economy.
+A Discord economy where your server earns wages, builds companies, hires friends, funds businesses, and argues about monetary policy. Each Discord server has its own nuggies (`nug`), treasury pool, businesses, and ledger.
 
-## The core loop
+**Start playing:** `$help` → `$jobs` → `$apply <id>` → `$clockin`. Wages arrive at the daily close. Save for a company, recruit workers, raise capital, and pay dividends. Use `/bug` to prepare a public [GitHub issue](https://github.com/frgmt0/tendies/issues).
 
-Every nuggie that exists was drawn from one reservoir, and all money moves around a single circuit between three places — the **pool**, player **wallets**, and company **treasuries**:
+Production days follow the desktop server's local calendar, including DST. Weekdays run midnight to midnight; Friday wages settle at Saturday midnight. Markets close on weekends. Investment, dividends, and acquisition acceptance reopen Monday; there is no pending-trade queue. `$market` displays company valuations—v1 equity purchases happen through funding rounds, not a secondary share exchange.
 
-- **Pool → wallets**: state companies pay wages straight from the pool (the faucet that keeps broke newbies earning).
-- **Pool → treasuries**: private companies "sell" their daily production to the market, and the market's cash *is* the pool (capped in aggregate per day — a draining pool scales everyone's revenue down together, which is how a recession is felt).
-- **Treasuries → wallets**: payroll and dividends.
-- **Wallets → treasuries**: investing in funding rounds.
-- **Back to the pool**: taxes (withheld on wages and dividends), founding fees, and the treasuries of bankrupt companies.
-- **New money**: only `$print` (Manager-only) creates genuinely new nuggies, and it raises the server-wide inflation index, quietly shrinking everyone's *real* wealth.
+[DESIGN.md](DESIGN.md) is the complete gameplay and operating contract, including accounting, time, failure recovery, and deferred features.
 
-Because the pool is finite, Managers have to govern: too much state payroll plus realized revenue drains the pool, taxes refill it, and the tension between starving the newbie pipeline, taxing everyone, and printing (eating the inflation hit) is the game.
+## Development
 
-## Setup
+Requires Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and Python 3.12 (uv can install it). Checks need no Discord token, SSH, or deployer, so this works in cloud-agent checkouts:
 
-Tendies is a [uv](https://docs.astral.sh/uv/) project (Python ≥ 3.12).
+```sh
+git clone https://github.com/frgmt0/tendies.git
+cd tendies
+./scripts/pipeline.sh check
+```
 
-1. **Install dependencies**
+To run a development bot, create a **separate Discord application/token** and use a separate database:
 
-   ```sh
-   uv sync
-   ```
+```sh
+cp .env.example .env
+chmod 600 .env
+# Edit .env to supply the DEVELOPMENT token.
+uv run tendies
+```
 
-2. **Configure the environment** — copy the example file and edit it:
+Enable **Message Content Intent** and **Server Members Intent** in the [Discord Developer Portal](https://discord.com/developers/applications). Invite with `bot` and `applications.commands` scopes and View Channels, Send Messages, Embed Links, Read Message History, and Add Reactions permissions. `/bug` registers at startup; if an older invite lacks application-command access, reauthorize the bot with both scopes. Normal commands bootstrap a guild automatically.
 
-   ```sh
-   cp .env.example .env
-   ```
+| Setting | Behavior |
+|---|---|
+| `DISCORD_TOKEN` | Required bot token. Use distinct production/development applications. |
+| `DATABASE_URL` | Development example uses `sqlite+aiosqlite:///tendies-dev.db`; production path comes from `deploy.toml`. |
+| `COMMAND_PREFIX` | `$` by default. |
+| `MANAGER_ROLE` | `Tendies Manager`; Manage Server permission also grants Manager access. |
+| `GAME_TIME_MODE` | `calendar` by default; `accelerated` explicitly enables development intervals. |
+| `GAME_TIMEZONE` | Optional IANA zone; unset means the host's timezone, with DST. |
+| `TICK_INTERVAL_SECONDS` | Only used in accelerated mode. Example: `60`. Does not shorten production days. |
+| `GITHUB_REPOSITORY` | `frgmt0/tendies`, used for `/bug` issue links. |
+| `TENDIES_HEALTH_FILE` | Production readiness heartbeat path; normally set by `deploy.toml`. |
 
-   | Variable | Default | Notes |
-   |---|---|---|
-   | `DISCORD_TOKEN` | _(none)_ | **Required.** Your Discord bot token. The bot refuses to start without it. |
-   | `DATABASE_URL` | `sqlite+aiosqlite:///tendies.db` | SQLite by default (handy for solo testing). For production use Postgres: `postgresql+asyncpg://user:password@host:5432/tendies`. |
-   | `COMMAND_PREFIX` | `$` | Command prefix. |
-   | `MANAGER_ROLE` | `Tendies Manager` | Name of the role that grants Manager (central-bank) powers. |
-   | `TICK_INTERVAL_SECONDS` | `86400` | Real seconds between game-day ticks. `86400` = one real day per game day. Set low (e.g. `60`) to speed up the economy for testing. |
+For fast playtesting, set `GAME_TIME_MODE=accelerated` and `TICK_INTERVAL_SECONDS=60` in the development environment. `$setday` and `$forcetick` are available only in that mode. Tests use isolated databases and never connect to Discord.
 
-3. **Create a Discord bot + token** — at the [Discord Developer Portal](https://discord.com/developers/applications), create an Application, add a Bot, and copy its token into `DISCORD_TOKEN`.
+## Commands
 
-4. **Enable the required gateway intents** — on the bot's page, under *Privileged Gateway Intents*, turn on both:
-   - **Message Content Intent** (prefix commands need to read message text), and
-   - **Server Members Intent** (resolves member roles and mentions for hiring and Manager checks).
-
-5. **Invite the bot** — generate an OAuth2 URL with the `bot` scope and, at minimum, the **Send Messages**, **Read Message History**, and **Add Reactions** permissions (reactions back the `✅` confirmation prompts; the bot also posts the daily-close announcement to the server's system channel or the first channel it can write to).
-
-6. **Launch**
-
-   ```sh
-   uv run tendies
-   ```
-
-### Bootstrapping a server
-
-There is no manual setup step. The first time *any* command runs in a guild, the bot bootstraps that server's economy automatically: it seeds the **pool** to 1,000,000,000,000 nug, sets the inflation index to `1.0` and the default tax rate to 15%, records the current game day, and creates the **state-owned companies** (McNuggie's, Public Works, The Postal Service) as share-less, revenue-less faucets with their always-open, auto-accepting jobs.
-
-**Manager commands** (the central-bank / treasury controls) are restricted to members who either hold the configured **Tendies Manager** role (see `MANAGER_ROLE`) or have the **Manage Server** permission. Everything else is open to all members.
-
-## Command reference
-
-Currency is nuggies (`nug`); the prefix is `$` by default. Wallet, valuation, and net-worth figures are shown in **real** terms (adjusted for the inflation index); flows like wages, tax, and revenue are shown nominal.
+Amounts accept plain nuggies and K/M/B/T suffixes. Cash-flow inputs are nominal; wallet/net-worth displays are adjusted for inflation. `$help <command>` provides usage and live founding-fee information.
 
 | Command | Who | Purpose |
 |---|---|---|
-| `$help` / `$help <command>` | anyone | Getting-started menu, or detail for one command (e.g. `$help found` shows the industries and your live founding-fee ladder) |
-| `$balance` / `$bal` | anyone | Your wallet (real), job, and holdings |
-| `$jobs` | anyone | List open positions (incl. always-open state jobs) |
-| `$apply <job_id>` | anyone | Apply to a job (state jobs auto-accept) |
-| `$clockin` | employee | Collect today's wage + contribute to production; builds a daily streak (milestone bonuses) |
-| `$clockout` | employee | Clock out for the day |
-| `$reminders <on/off>` | anyone | Toggle a ping when you forget to clock in (offered on first clock-in) |
-| `$quit <ticker>` | employee | Leave a job; keep vested equity, forfeit the rest |
-| `$found <ticker> <name> <industry>` | anyone | Found a company (scaling fee → pool) |
-| `$company <ticker>` | anyone | Company detail: treasury, cap table, revenue, valuation |
-| `$postjob <ticker>` | owner | Post a job (title, wage, optional equity grant) |
-| `$applicants <ticker>` | owner | Review applicants |
-| `$hire <ticker> <applicant>` | owner | Hire an applicant |
-| `$fire <ticker> @user` | owner | Fire an employee |
-| `$promote @user <percent>` | owner | Give one of your employees a raise |
-| `$raise <ticker> <amount> <equity%>` | owner | Open a funding round (alias `$fundraise`) |
-| `$invest <ticker> <amount>` | accredited | Buy into an open round |
-| `$dividend <ticker> <amount>` | owner | Pay a pro-rata dividend (alias `$div`) |
-| `$acquire <acquirer> <target> <offer>` | acquirer owner | Send a company-to-company acquisition offer |
-| `$accept <acquirer>` | target owner | Accept an offer (keyed by the acquirer's ticker) |
-| `$decline <acquirer>` | target owner | Decline an offer |
-| `$market` / `$stocks` | anyone | The stock exchange — prices, sentiment, today's movers (frozen on weekends) |
-| `$leaderboard` / `$rich` | anyone | Players ranked by real net worth, with holdings |
-| `$pool` | anyone | Pool balance, inflation index, tax rate, money supply |
-| `$today` | anyone | Game day + market open/closed |
-| `$print <amount>` | **Manager** | Add money to the pool (inflationary; requires `✅` confirmation) |
-| `$taxrate <percent>` | **Manager** | Set the wage + dividend tax rate |
-| `$setday <weekday>` | **Manager** | Correct the game day if the schedule drifts |
-| `$event <industry> <multiplier> "<blurb>"` | **Manager** | Fire a market event for today |
-| `$stats` / `$macro` | **Manager** | Macro dashboard: money supply, pool health, recent flows, wealth concentration (Gini) |
-| `$forcetick` | **Manager** | Advance the game one day immediately (ops/testing) |
+| `$help [command]` | Anyone | Onboarding and command details |
+| `$balance` / `$bal` | Anyone | Wallet, job, holdings, net worth |
+| `$jobs [page]` / `$apply <id>` | Anyone | Find and apply for work; state jobs hire instantly |
+| `$clockin` / `$clockout` | Employee | Join or withdraw from today's shift; wages settle at close |
+| `$reminders on/off` | Anyone | Opt into a daily clock-in reminder |
+| `$quit [ticker]` | Employee | Leave employment; retain vested equity |
+| `$found <ticker> <name> <industry>` | Anyone | Found a company; the first fee is 50K |
+| `$company <ticker>` | Anyone | Treasury, capitalization, employment, valuation |
+| `$postjob <ticker>` | Owner | Interactive reusable hiring-role posting |
+| `$applicants <ticker>` | Owner | Review applications |
+| `$hire <ticker> <letter or @user>` | Owner | Hire an applicant |
+| `$fire <ticker> @user` | Owner | End employment after any clocked-in shift settles |
+| `$promote @user <percent>` | Owner | Raise an employee's wage |
+| `$deposit <ticker> <amount>` | Owner | Move your cash into the company without new shares |
+| `$raise <ticker> <amount> <equity%>` | Owner | Open a funding round; alias `$fundraise` |
+| `$closeround <ticker>` | Owner/Manager | Close an unfinished round; completed investments stay |
+| `$invest <ticker> <amount>` | Accredited player | Buy new equity in an open round, weekdays |
+| `$dividend <ticker> <amount>` | Owner | Taxed pro-rata shareholder payout, weekdays; alias `$div` |
+| `$acquire <acquirer> <target> <offer>` | Owner | Offer company cash to acquire another company |
+| `$accept <acquirer>` / `$decline <acquirer>` | Target owner | Respond to an acquisition offer; acceptance weekdays |
+| `$market [page]` / `$stocks` | Anyone | Company valuations; weekend quotes retain the last close |
+| `$leaderboard` / `$rich` | Anyone | Players by real net worth |
+| `$pool` / `$today` | Anyone | Economy and calendar status |
+| `$print <amount>` | Manager | Create money with inflation; requires reaction confirmation |
+| `$taxrate <percent>` | Manager | Set tax on wages, bonuses, dividends, and acquisition proceeds |
+| `$event <industry or all> <multiplier> <headline>` | Manager | Affect the current business day's production and valuation |
+| `$stats` / `$macro` | Manager | Macro dashboard and wealth concentration |
+| `$setday <weekday>` / `$forcetick` | Manager in accelerated mode | Testing calendar controls |
+| `/bug` | Anyone in a guild | Short form → prefilled public GitHub issue; player reviews and submits |
 
-## Project layout
+Clock-in streaks award one-time taxed bonuses at 10, 20, and 60 business days. Weekends preserve streak continuity. A worker who is clocked in cannot be fired or lose their shift through an acquisition; a voluntary quitter can wait for settlement or explicitly clock out first.
 
-Source lives in `src/tendies/`, importable as `tendies.<module>`.
+## Production on desktop
 
-**Engine core** (the frozen contract — shared primitives every slice builds on):
+The checked-in configuration targets `ssh desktop`, running as Jason's **systemd user service**. `deployer` is maintained separately in `~/Code/deployer` on the development Mac. The desktop has a provisioned copy of its release engine under `~/.local/share/tendies/tools/deployer` for local polling deployments. No self-SSH key or inbound deployment API is required.
 
-- `config.py` — tunable game constants (§17 knobs), industries, state-company seeds, and environment-driven `Settings`.
-- `models.py` — SQLAlchemy ORM: `ServerState`, `User`, `PlayerProfile` (clock-in streak + reminder prefs), `Company`, `Holding`, `Job`, `Employment`, `EquityGrant`, `Application`, `Offer`, `FundingRound`, `Event`, `Transaction`, plus account helpers.
-- `errors.py` — `GameError` and its player-facing subclasses (`NotFound`, `NotAllowed`, `InsufficientFunds`, `BadInput`).
-- `money.py` — the single chokepoint for all money movement (fees, capital injection, revenue, wages, dividends, tax withholding, the ledger).
-- `lifecycle.py` — cap-table reads and the unwinding helpers used on quit, firing, and bankruptcy.
-- `lookups.py` — resolution helpers (`get_state`, `get_company`, `require_owner`, `get_employment`).
-- `valuation.py` — on-read company valuation, share prices, net worth, and the two leaderboards.
-- `events.py` — market-event rolling and active multipliers.
-- `tick.py` — the load-bearing daily tick (`run_tick`) and `is_market_open`.
-- `gameday.py` — business-day / weekend calendar helpers.
-- `formatting.py` — number formatting (commas, K/M/B/T abbreviation, real-terms conversion, percentages).
-- `discordutil.py` — the Discord edge: manager checks, embeds, reaction confirmations, interactive prompts, and the shared amount parser.
-- `emojis.py` — the server's custom emoji glyphs (currency, industries, events, etc.) in one place; cogs reference names, not raw IDs.
-- `help_menu.py` — the custom `$help` command (`commands.HelpCommand` subclass): an onboarding landing page plus per-command detail, with the `$found` industry list and fee ladder derived live from `config` + the guild's `ServerState`.
-- `db.py` — async SQLAlchemy engine + session context manager.
-- `bot.py` — `TendiesBot`: owns `db`, `settings`, and the scheduler; bootstraps guilds on demand and renders `GameError`s centrally.
-- `scheduler.py` — advances every guild's economy each tick interval and posts the daily-close announcement.
-- `__init__.py` — the `tendies` console entry point.
+- Bot service: `deployer-tendies.service`, `Restart=always`, three-second restart delay; user lingering starts it at boot.
+- Releases: `/home/jason/.local/share/deployer/tendies/releases/` with a `current` symlink.
+- Persistent SQLite: `/home/jason/.local/share/tendies/tendies.db`.
+- Readiness: `/home/jason/.local/share/tendies/health.json`.
+- Secrets: deployer's protected `.deployer/environment` outside releases.
+- Backups: `/home/jason/.local/share/tendies/backups/`.
 
-**Services** (`services/` — pure game logic; take `(session, state, ...)`, mutate ORM + call `money`/`lifecycle`, never touch Discord, raise `GameError`):
-
-- `economy.py` — bootstrap, money printing, tax rate, the game-day cursor, and the `$pool` read.
-- `companies.py` — founding, company detail, posting jobs, applicants, hiring/firing.
-- `employment.py` — applying, clocking in/out, quitting.
-- `investment.py` — funding rounds, the accredited gate, dividends.
-- `acquisitions.py` — offers, accept/decline, and the M&A unwind.
-
-**Cogs** (`cogs/` — thin Discord command layer; parse args, open a session, fetch state, call a service, render the result):
-
-- `player.py` — `$balance`, `$jobs`, `$apply`, `$clockin`, `$clockout`, `$quit`.
-- `company.py` — `$found`, `$company`, `$postjob`, `$applicants`, `$hire`, `$fire`.
-- `capital.py` — `$raise`, `$invest`, `$dividend`, `$acquire`, `$accept`, `$decline`.
-- `market.py` — `$market`, `$leaderboard`, `$pool`, `$today`.
-- `admin.py` — Manager commands: `$print`, `$taxrate`, `$setday`, `$event`, `$forcetick`.
-
-## Running the tests
+Create your local production environment file once:
 
 ```sh
-uv run pytest
+cp .env.prod.example .env.prod
+chmod 600 .env.prod
+# Edit DISCORD_TOKEN. Do not put the development database URL in this file.
+./scripts/pipeline.sh deploy-dry-run
+./scripts/pipeline.sh deploy
+./scripts/pipeline.sh status
 ```
 
-## Design
+The script tests a clean committed checkout, records the source revision, and invokes `deployer deploy --env .env.prod`. `TENDIES_SECRETS_FILE` can select another local file. This uses deployer's supported credential transfer: SSH to a `0600` environment file, excluded from uploads, available to the running service but not setup/build commands. Values in the file override `[env]`, so keep production paths in `deploy.toml` unless deliberately changing them. A failed release restores the preceding code, environment, and service configuration.
 
-The full design specification — the macroeconomic model, the load-bearing daily-tick ordering, the data model, and the bugs that will actually bite — lives in [`DESIGN.md`](DESIGN.md). The authoritative values for every tunable knob (the §17 "Tunable constants" table: starting pool, founding fees, productivity, tax rate, the recession cap, the accredited threshold, and more) live as plain module constants in [`src/tendies/config.py`](src/tendies/config.py), where the engine imports them directly and tests can monkeypatch them.
+Remote setup uses `uv sync --frozen --no-dev`, then readiness must show a live process, a fresh Discord-ready heartbeat, the expected release, and a readable SQLite database. Local tests alone are not sufficient deployment evidence. Runtime uses one exclusive SQLite lease plus serialized transactions; do not start a second bot against its database.
+
+## PRs, cloud agents, and automatic releases
+
+1. Make a branch and edit code/docs. Run `./scripts/pipeline.sh check`.
+2. Open a PR. GitHub Actions runs the same check on a clean Linux checkout using locked dependencies, with no production secrets.
+3. Merge a passing PR into `main`.
+4. Desktop's `tendies-poll.timer` fetches `main`, creates an isolated candidate checkout, runs the checks again, and deploys using the same deployer release engine. No changed revision means no deployment.
+5. A failed check keeps the current release. A failed activation triggers deployer's restore behavior. Inspect logs if polling fails.
+
+The poller reuses the protected production environment rather than checking credentials into Git. It does not poll feature branches or execute unmerged PRs. Anyone who can merge code to `main` can change production behavior; keep merge access limited. The repo's required CI check is `test`.
+
+The initial host setup installs uv and Python 3.12, provisions the deployer package, and clones the public repository into `~/.local/share/tendies/source`. Once the first release is healthy, enable the timers on desktop:
+
+```sh
+ssh desktop '~/.local/share/deployer/tendies/current/scripts/pipeline.sh install-timers'
+```
+
+Poll/backup units live in `scripts/systemd/`; these are specific to this desktop's paths. Porting to another user/server requires updating `deploy.toml`, units, and the adapter's deployer path. The future authenticated deployer MCP service can reuse these commands; this release exposes no deployment port.
+
+## Operations, backups, and rollback
+
+```sh
+./scripts/pipeline.sh logs --lines 80
+./scripts/pipeline.sh restart
+./scripts/pipeline.sh backup
+./scripts/pipeline.sh backup-fetch
+./scripts/pipeline.sh rollback
+```
+
+Backups use SQLite's online backup API, verify the snapshot with `PRAGMA quick_check`, use private permissions, and retain the newest 30. The daily timer and predeployment setup create backups; `backup-fetch` copies snapshots to this checkout's ignored `.backups/` directory for an additional machine copy. Regularly copy snapshots off desktop: same-disk backups cannot survive disk loss. Runtime data is never part of a release upload.
+
+Before deliberately rolling back, pause polling so it does not immediately redeploy the current `main` revision:
+
+```sh
+ssh desktop 'systemctl --user stop tendies-poll.timer'
+./scripts/pipeline.sh rollback
+```
+
+Rollback restores code/environment, **not player data**. Fix or revert the offending commit through a PR, then restart polling when ready. Restore data only deliberately, with the bot stopped:
+
+```sh
+ssh desktop
+systemctl --user stop tendies-poll.timer
+systemctl --user stop deployer-tendies.service
+~/.local/share/deployer/tendies/current/scripts/pipeline.sh restore-local /absolute/path/to/backup.sqlite3 --confirm
+systemctl --user start deployer-tendies.service
+# Check service and heartbeat before restarting the poll timer.
+systemctl --user start tendies-poll.timer
+```
+
+A restore first preserves the existing database, verifies the selected snapshot, and replaces the stopped database. Tests exercise restoration on disposable copies. Never copy only a live SQLite `.db` file while ignoring its WAL; use the backup command. SQLite files survive service crashes and reboots. Startup recovers missed calendar closes without inventing attendance or paying a date twice.
+
+Useful diagnostics:
+
+```sh
+ssh desktop 'systemctl --user status tendies-poll.timer tendies-backup.timer'
+ssh desktop 'journalctl --user-unit tendies-poll.service -n 80 --no-pager'
+ssh desktop 'cd ~/.local/share/deployer/tendies/current && /usr/bin/python3 src/tendies/ops.py healthcheck'
+```
+
+## Source layout and contribution expectations
+
+`services/` implements game rules without Discord. `money.py` owns cash/ledger operations; `tick.py` settlement; `scheduler.py` local calendar recovery; `valuation.py` live and closing quotes; `db.py` transaction serialization; `models.py` schema. `cogs/` implements commands, including `/bug` in `feedback.py`. `health.py` provides the process lease/heartbeat; `ops.py` provides backup/restore/readiness tooling. `scripts/pipeline.sh` is the operator/cloud entry point.
+
+Add a regression for a reported bug, preserve guild isolation and accounting invariants, and update DESIGN/README when behavior changes. Schema changes need an explicit migration and restore plan: `create_all` does not alter existing columns. Do not check in `.env*`, databases, backups, tokens, or local machine state. Do not run production tokens in cloud tests. The test suite covers core rules and command behavior; Discord connection and real user interactions still need deployment verification.

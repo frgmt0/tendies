@@ -19,7 +19,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import Company, EquityGrant, Employment, Holding, Job, Offer
+from .models import Company, EquityGrant, Employment, FundingRound, Holding, Job, Offer
 
 
 async def end_all_employment(session: AsyncSession, company: Company) -> int:
@@ -57,6 +57,15 @@ async def close_jobs(session: AsyncSession, company: Company) -> None:
     """Close all of ``company``'s job postings."""
     await session.execute(
         update(Job).where(Job.company_id == company.id).values(open=False)
+    )
+
+
+async def close_funding_rounds(session: AsyncSession, company: Company) -> None:
+    """Close fundraising when a company is being dissolved."""
+    await session.execute(
+        update(FundingRound)
+        .where(FundingRound.company_id == company.id, FundingRound.status == "open")
+        .values(status="closed")
     )
 
 

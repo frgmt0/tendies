@@ -14,8 +14,12 @@ scheduler, and exposes them to cogs as ``bot.db`` / ``bot.settings`` /
 
 from __future__ import annotations
 
-import datetime as dt
+import asyncio
+from contextlib import suppress
 import logging
+import uuid
+import os
+from pathlib import Path
 
 import discord
 from discord.ext import commands
@@ -24,6 +28,8 @@ from .config import Settings, get_settings
 from .db import Database
 from .errors import GameError
 from .help_menu import TendiesHelp
+from . import gameday
+from .health import acquire_database_lease, heartbeat, write_heartbeat
 
 log = logging.getLogger("tendies")
 
@@ -34,6 +40,7 @@ COGS: tuple[str, ...] = (
     "tendies.cogs.capital",
     "tendies.cogs.market",
     "tendies.cogs.admin",
+    "tendies.cogs.feedback",
 )
 
 
@@ -56,15 +63,31 @@ class TendiesBot(commands.Bot):
         self.db: Database = db or Database(self.settings.database_url)
         # Set by setup_hook; imported lazily to avoid a circular import.
         self.scheduler = None
+        self._database_lease = None
+        self._heartbeat_task: asyncio.Task | None = None
 
     async def setup_hook(self) -> None:
-        await self.db.create_all()
-        for ext in COGS:
-            await self.load_extension(ext)
-        from .scheduler import TickScheduler
+        self._database_lease = acquire_database_lease(self.settings.database_url)
+        try:
+            await self.db.create_all()
+            for ext in COGS:
+                await self.load_extension(ext)
+            # /bug is an application command. Registration is part of readiness;
+            # startup must fail visibly if Discord rejects it.
+            await self.tree.sync()
+            from .scheduler import TickScheduler
 
-        self.scheduler = TickScheduler(self)
-        self.scheduler.start()
+            self.scheduler = TickScheduler(self)
+            await self.scheduler.catch_up_all_guilds()
+            self.scheduler.start()
+            self._heartbeat_task = asyncio.create_task(
+                heartbeat(self), name="tendies-heartbeat"
+            )
+        except Exception:
+            if self._database_lease is not None:
+                self._database_lease.close()
+                self._database_lease = None
+            raise
         log.info("Tendies ready: %d cogs loaded.", len(COGS))
 
     async def on_ready(self) -> None:
@@ -75,8 +98,14 @@ class TendiesBot(commands.Bot):
             raise GameError("Tendies runs per-server — use these commands in a server channel.")
         from .services import economy
 
+        today = gameday.local_date(self.settings.calendar_timezone)
         async with self.db.session() as session:
-            await economy.ensure_bootstrapped(session, ctx.guild.id, dt.date.today())
+            await economy.ensure_bootstrapped(session, ctx.guild.id, today)
+        # Synchronize before the command opens its business transaction.  This
+        # closes the narrow race where the first post-midnight command could act
+        # on yesterday's still-open calendar date.
+        if self.scheduler is not None and not self.scheduler.accelerated:
+            await self.scheduler.synchronize_guild(ctx.guild.id, target_day=today)
 
     async def on_command_error(self, ctx: commands.Context, error: Exception) -> None:
         original = getattr(error, "original", error)
@@ -88,14 +117,31 @@ class TendiesBot(commands.Bot):
         if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument, commands.UserInputError)):
             await ctx.send(f"⚠️ {error}")
             return
-        log.exception("Unhandled command error in %s", ctx.command, exc_info=original)
-        await ctx.send("💥 Something broke on our end. The Managers have been notified.")
+        reference = uuid.uuid4().hex[:8]
+        log.exception("Command failure %s in %s", reference, ctx.command, exc_info=original)
+        await ctx.send(f"💥 That command failed. Use `/bug` and include reference `{reference}` so we can investigate.")
 
     async def close(self) -> None:
         if self.scheduler is not None:
             self.scheduler.shutdown()
-        await super().close()
-        await self.db.dispose()
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._heartbeat_task
+            self._heartbeat_task = None
+        health_target = os.getenv("TENDIES_HEALTH_FILE")
+        if health_target:
+            try:
+                write_heartbeat(Path(health_target), ready=False)
+            except Exception:
+                log.exception("Could not write shutdown heartbeat")
+        try:
+            await super().close()
+            await self.db.dispose()
+        finally:
+            if self._database_lease is not None:
+                self._database_lease.close()
+                self._database_lease = None
 
 
 def build_bot() -> TendiesBot:
