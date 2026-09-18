@@ -749,6 +749,7 @@ dependencies = [
     { name = "discord-py" },
     { name = "python-dotenv" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tzlocal" },
 ]
 
 [package.dev-dependencies]
@@ -760,11 +761,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "apscheduler", specifier = ">=3.10" },
+    { name = "apscheduler", specifier = ">=3.11,<4" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "discord-py", specifier = ">=2.4" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "tzlocal", specifier = ">=5.2" },
 ]
 
 [package.metadata.requires-dev]

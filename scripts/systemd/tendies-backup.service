@@ -1,0 +1,10 @@
+[Unit]
+Description=Create a consistent Tendies SQLite backup
+ConditionPathExists=/home/jason/.local/share/deployer/tendies/current/src/tendies/ops.py
+
+[Service]
+Type=oneshot
+Environment=TENDIES_DATA_DIR=/home/jason/.local/share/tendies
+Environment=DATABASE_URL=sqlite+aiosqlite:////home/jason/.local/share/tendies/tendies.db
+ExecStart=/usr/bin/python3 /home/jason/.local/share/deployer/tendies/current/src/tendies/ops.py backup --reason daily
+Nice=10

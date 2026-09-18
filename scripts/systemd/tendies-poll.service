@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll tendies main and deploy a verified release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=TENDIES_SOURCE_REPO=/home/jason/.local/share/tendies/source
+Environment=PATH=/home/jason/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TENDIES_SECRETS_FILE=/home/jason/.local/share/deployer/tendies/.deployer/environment
+Environment=TENDIES_DEPLOYER_ROOT=/home/jason/.local/share/tendies/tools/deployer
+ExecStart=/home/jason/.local/share/deployer/tendies/current/scripts/pipeline.sh poll-main
+Nice=10

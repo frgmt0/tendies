@@ -15,6 +15,7 @@ subclasses with player-facing messages.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, select
@@ -99,11 +100,12 @@ async def ensure_bootstrapped(
             )
     await session.flush()
 
-    # ---- roll the week's events only when bootstrapping ON a Monday (§5) --
-    # Rolling mid-week would assign events to already-passed business days that
-    # can never fire; let the first Monday tick own event generation otherwise.
-    if gameday.is_monday(today):
-        await events.roll_weekly_events(session, state, today)
+    # ---- roll the current week's events (§5) -----------------------------
+    # A guild may first use the bot mid-week.  Seed that week as well so the
+    # event system is live immediately rather than waiting until next Monday.
+    await events.roll_weekly_events(
+        session, state, gameday.week_monday(today), not_before=today
+    )
 
     return state
 
@@ -137,6 +139,8 @@ async def apply_print(session: AsyncSession, state: ServerState, amount: int) ->
     inflation index. The only minting path in the game (§3)."""
     if amount <= 0:
         raise BadInput("Print amount must be positive.")
+    if amount > money.MAX_INT64 or state.pool_balance > money.MAX_INT64 - amount:
+        raise BadInput("That print would exceed the economy's maximum balance.")
     return await money.print_money(session, state, amount, state.game_day)
 
 
@@ -148,7 +152,7 @@ async def set_tax_rate(session: AsyncSession, state: ServerState, rate_fraction:
     """Set the wage + dividend tax rate. ``rate_fraction`` is a fraction in
     ``[0, 0.95)``; values at or above the ceiling are rejected so payroll can
     never round to zero take-home."""
-    if rate_fraction < 0 or rate_fraction >= 0.95:
+    if not math.isfinite(rate_fraction) or rate_fraction < 0 or rate_fraction >= 0.95:
         raise BadInput("Tax rate must be between 0% and 95%.")
     state.tax_rate = rate_fraction
 
@@ -234,7 +238,7 @@ class MacroStats:
 def _gini(values: list[float]) -> float:
     """Gini coefficient (0 = perfect equality, →1 = one player holds everything)
     over non-negative net-worth values. Returns 0.0 for an empty/zero economy."""
-    xs = sorted(v for v in values if v > 0)
+    xs = sorted(v for v in values if v >= 0)
     n = len(xs)
     total = sum(xs)
     if n == 0 or total <= 0:

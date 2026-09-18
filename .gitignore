@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.env.prod
+.source-revision
 *.db
 *.sqlite3
 .pytest_cache/
@@ -9,3 +11,12 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+.env.*
+!.env.example
+!.env.prod.example
+*.db-wal
+*.db-shm
+*.db.lock
+.backups/
+.release-id
+.source-revision

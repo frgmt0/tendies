@@ -10,6 +10,7 @@ against an in-memory SQLite instance.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy import event
 
 from .models import Base
 
@@ -29,6 +31,16 @@ class Database:
         # SQLite (esp. in-memory) needs a shared connection across the async
         # session; callers pass the appropriate pool via engine_kwargs.
         self.engine: AsyncEngine = create_async_engine(url, echo=echo, **engine_kwargs)
+        self._transaction_lock = asyncio.Lock()
+        if self.engine.dialect.name == "sqlite":
+            @event.listens_for(self.engine.sync_engine, "connect")
+            def configure_sqlite(connection, _record):
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA busy_timeout=30000")
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=FULL")
+                cursor.close()
         self.sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self.engine, expire_on_commit=False
         )
@@ -49,7 +61,10 @@ class Database:
         one of these so money movements are atomic — partial ticks can't leak
         or destroy nuggies.
         """
-        async with self.sessionmaker() as session:
+        # One process owns production. Serialize whole read/modify/write units,
+        # not just individual SQL statements, so simultaneous Discord commands
+        # cannot spend the same wallet balance or race the midnight close.
+        async with self._transaction_lock, self.sessionmaker() as session:
             try:
                 yield session
                 await session.commit()

@@ -9,6 +9,7 @@ propagate to the bot's ``on_command_error`` for uniform display.
 
 from __future__ import annotations
 
+import math
 import shlex
 
 from discord.ext import commands
@@ -33,9 +34,19 @@ def _parse_percent(raw: str) -> float:
         value = float(token)
     except ValueError:
         raise BadInput(f"Couldn't read **{raw}** as a percentage. Try `15` or `15%`.")
+    if not math.isfinite(value):
+        raise BadInput("Tax rate must be a finite number.")
     if value < 0:
         raise BadInput("Tax rate can't be negative.")
     return value / 100 if value > 1 else value
+
+
+def _require_accelerated_mode(bot) -> None:
+    """Keep calendar rewrites out of production's wall-clock economy."""
+    if not bool(getattr(bot.settings, "accelerated_mode", False)):
+        raise BadInput(
+            "This command is available only when accelerated/testing mode is enabled."
+        )
 
 
 class AdminCog(commands.Cog, name="Manager"):
@@ -114,6 +125,7 @@ class AdminCog(commands.Cog, name="Manager"):
     async def setday_cmd(self, ctx: commands.Context, weekday: str) -> None:
         if not await discordutil.require_manager(ctx):
             return
+        _require_accelerated_mode(self.bot)
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             await economy.set_day(session, state, weekday)
@@ -201,6 +213,8 @@ class AdminCog(commands.Cog, name="Manager"):
             multiplier = float(multiplier_raw)
         except ValueError:
             raise BadInput(f"Couldn't read **{multiplier_raw}** as a multiplier.")
+        if not math.isfinite(multiplier):
+            raise BadInput("Multiplier must be a finite number.")
         if multiplier <= 0:
             raise BadInput("Multiplier must be greater than 0.")
         if multiplier > 100:
@@ -301,6 +315,7 @@ class AdminCog(commands.Cog, name="Manager"):
     async def forcetick_cmd(self, ctx: commands.Context) -> None:
         if not await discordutil.require_manager(ctx):
             return
+        _require_accelerated_mode(self.bot)
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id, for_update=True)
             report = await tick.run_tick(session, state)

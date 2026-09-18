@@ -47,21 +47,23 @@ SUMMARY: dict[str, str] = {
     "fire": "let an employee go",
     "promote": "give one of your employees a raise",
     "raise": "open a funding round to sell equity for cash",
+    "deposit": "put your wallet cash into your company treasury",
+    "closeround": "close a funding round and keep funds already raised",
     "invest": "buy equity in an open round (accredited investors)",
     "dividend": "pay treasury cash to shareholders, pro-rata",
     "acquire": "offer to buy another company",
     "accept": "accept an acquisition offer made to your company",
     "decline": "decline an acquisition offer",
-    "market": "the stock exchange — prices and today's movers",
+    "market": "company valuations and moves since the last close",
     "leaderboard": "richest players by real net worth",
     "pool": "the server treasury, money supply, tax, inflation",
     "today": "what game-day it is and whether markets are open",
     "print": "mint nuggies into the pool (inflationary)",
     "taxrate": "set the wage + dividend tax rate",
-    "setday": "correct the game calendar",
+    "setday": "set the testing calendar (accelerated mode only)",
     "event": "fire a market event on an industry",
     "stats": "macro dashboard: pool health, flows, wealth concentration",
-    "forcetick": "advance the game one day right now",
+    "forcetick": "close a testing day (accelerated mode only)",
 }
 
 #: Friendly usage string (without the prefix). Hand-written because the raw
@@ -82,12 +84,14 @@ USAGE: dict[str, str] = {
     "fire": "fire <ticker> <@user>",
     "promote": "promote <@employee> <% raise>",
     "raise": "raise <ticker> <amount> <equity%>",
+    "deposit": "deposit <ticker> <amount>",
+    "closeround": "closeround <ticker>",
     "invest": "invest <ticker> <amount>",
     "dividend": "dividend <ticker> <amount>",
     "acquire": "acquire <yourTicker> <targetTicker> <offer>",
     "accept": "accept <acquirerTicker>",
     "decline": "decline <acquirerTicker>",
-    "market": "market",
+    "market": "market [page]",
     "leaderboard": "leaderboard",
     "pool": "pool",
     "today": "today",
@@ -146,16 +150,17 @@ EXTRAS: dict[str, str] = {
     ),
     "acquire": (
         "A company-to-company deal: the offer is paid from **your** company's "
-        "treasury to the target's shareholders. The target's treasury, jobs, and "
-        "production fold into yours; its staff are laid off and may re-apply."
+        "treasury to the target's shareholders. The target's treasury and "
+        "open job listings fold into yours; its staff are laid off and may re-apply."
     ),
     "pool": (
         "Wallets, valuations, and net worth are shown in **real** terms (adjusted "
         "for inflation). Wages, tax, and revenue are shown nominal."
     ),
     "market": (
-        "Prices update at the daily close and freeze on weekends. 'Movers' are "
-        "industries currently swung by an active event."
+        "Business-day valuations update as the economy changes; daily moves compare "
+        "with the previous close. Weekend prices retain the last close. Buy equity "
+        "through funding rounds; player-to-player share trading is not available."
     ),
     "print": (
         "**Manager only.** Adds brand-new nuggies to the pool and raises the "
@@ -175,7 +180,7 @@ EXTRAS: dict[str, str] = {
         "**Manager only.** Your governance cockpit: money supply and prints, "
         "pool health (and the recession cap), the last few days of flows in/out "
         "of the pool, who's working, and wealth concentration (Gini). Use it to "
-        "decide when to tax, cut state jobs, or print."
+        "decide when to adjust taxes or print."
     ),
 }
 
@@ -186,7 +191,7 @@ CATEGORIES: list[tuple[str, str, list[str]]] = [
     (emojis.FACTORY, "Your companies",
      ["found", "company", "postjob", "applicants", "hire", "fire", "promote"]),
     (emojis.STOCK_UP, "Capital markets",
-     ["raise", "invest", "dividend", "acquire", "accept", "decline"]),
+     ["deposit", "raise", "closeround", "invest", "dividend", "acquire", "accept", "decline"]),
     (emojis.LEADERBOARD, "Markets & info",
      ["market", "leaderboard", "pool", "today"]),
     (emojis.MONEY_PRINTER, "Managers · central bank",
@@ -240,10 +245,10 @@ def build_landing_embed(prefix: str) -> discord.Embed:
         f"`{prefix}jobs` → find work → `{prefix}apply <id>` → take it → "
         f"`{prefix}clockin` every weekday → watch `{prefix}balance` grow → "
         f"`{prefix}found` your own company.\n\n"
-        "Money only moves on weekdays, and you're paid at the **daily close** — "
+        "Wages settle on weekdays at the **daily close** — "
         "not the instant you clock in.\n\n"
         f"Type `{prefix}help <command>` for the full rundown — e.g. "
-        f"`{prefix}help found`."
+        f"`{prefix}help found`. Found a bug? Use **/bug** to prepare a GitHub issue."
     )
     embed = discord.Embed(
         title=f"{emojis.NUGGIE} Tendies — how to play",

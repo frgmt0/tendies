@@ -71,6 +71,9 @@ async def test_conservation_through_full_playthrough(world):
         await w.tick()
         await w.assert_supply(STARTING_POOL)
 
+    while not gameday.is_business_day(state.game_day):
+        await w.tick()
+
     # Dividend off AAA's treasury.
     await investment.pay_dividend(w.session, state, OWNER, "AAA", 100_000)
     await w.session.flush()
@@ -81,7 +84,8 @@ async def test_conservation_through_full_playthrough(world):
     cid, sjob = await first_state_job(w)
     await employment.apply_to_job(w.session, state, INVESTOR, sjob)
     await w.session.flush()
-    for _ in range(30):
+    business_ticks = 0
+    while business_ticks < 30:
         if not gameday.is_business_day(state.game_day):
             await w.tick()
             continue
@@ -93,7 +97,11 @@ async def test_conservation_through_full_playthrough(world):
             pass
         await w.session.flush()
         await w.tick()
+        business_ticks += 1
     await w.assert_supply(STARTING_POOL)
+
+    while not gameday.is_business_day(state.game_day):
+        await w.tick()
 
     await w.make_rich(INVESTOR, 50_000_000)
     await w.assert_supply(STARTING_POOL)

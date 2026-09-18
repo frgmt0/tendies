@@ -59,7 +59,7 @@ async def test_market_empty_then_open_header():
         ctx = await h.invoke(h.ctx(1), "market")
         text = ctx.last_text()
         assert emojis.STOCK_UP in text  # exchange header
-        assert "No companies are trading yet" in text
+        assert "No private companies yet" in text
     finally:
         await h.close()
 
@@ -628,7 +628,9 @@ async def test_setday_corrects_calendar():
 async def test_forcetick_closed_on_weekend():
     h = await Harness.create(weekday="friday")
     try:
-        # Advance Friday -> Saturday: a closed tick.
+        # Friday settles first; the following Saturday close is empty.
+        friday = await h.invoke(h.ctx(9, manager=True), "forcetick")
+        assert "Daily close — Friday" in friday.last_text()
         ctx = await h.invoke(h.ctx(9, manager=True), "forcetick")
         assert "Closed tick" in ctx.last_text()
     finally:

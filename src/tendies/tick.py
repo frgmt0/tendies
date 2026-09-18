@@ -3,7 +3,7 @@
 Runs once per game day for one guild, inside the caller's session transaction so
 the whole tick is atomic. The sequence, exactly as specified:
 
-1. Advance the day (weekend → closed tick: only step 7; Monday → roll events).
+1. Settle the current day (weekend → closed tick: only clock-out).
 2. Events are read from the table on demand (no separate "apply" state).
 3. Vest equity grants → holdings.
 4. Produce, then realize revenue — the recession step. Tentative revenue is
@@ -12,7 +12,7 @@ the whole tick is atomic. The sequence, exactly as specified:
 5. Pay payroll (revenue already landed). Private: treasury → wallet, pro-rata
    when short, persistent insolvency → bankruptcy. State: pool → wallet.
 6. Tax is withheld inside each payout (folded into step 5).
-7. Auto clock-out everyone.
+7. Auto clock-out everyone, record the close, then advance the calendar.
 
 The three bugs §18 warns about live here, so the structure keeps them visible:
 revenue (step 4) strictly precedes payroll (step 5); the recession ratio is
@@ -33,6 +33,7 @@ from . import events as events_mod
 from . import gameday
 from . import lifecycle
 from . import money
+from . import valuation
 from .config import INSOLVENCY_GRACE_DAYS, RECESSION_CAP_FRACTION
 from .models import Company, Employment, EquityGrant, Holding, ServerState
 
@@ -85,36 +86,41 @@ async def run_tick(
     *,
     rng: random.Random | None = None,
 ) -> TickReport:
-    """Advance ``state`` one game day and run the full tick. Returns a report the
-    caller can format into a daily-close announcement."""
-    # ---- Step 1: advance the day -----------------------------------------
-    new_day = gameday.next_day(state.game_day)
-    state.game_day = new_day
-    state.weekday = gameday.weekday_name(new_day)
+    """Settle ``state.game_day``, then advance to the next open calendar date.
+
+    Attendance belongs to the date players saw while clocking in.  Advancing
+    first would therefore strand Friday attendance on a closed Saturday and
+    apply admin events one day late.
+    """
+    current_day = state.game_day
 
     report = TickReport(
         guild_id=state.guild_id,
-        game_day=new_day,
-        weekday=state.weekday,
-        is_business_day=gameday.is_business_day(new_day),
+        game_day=current_day,
+        weekday=gameday.weekday_name(current_day),
+        is_business_day=gameday.is_business_day(current_day),
     )
 
-    if gameday.is_monday(new_day):
-        rolled = await events_mod.roll_weekly_events(session, state, new_day, rng=rng)
-        report.rolled_events = [e.blurb for e in rolled]
+    if gameday.is_monday(current_day):
+        weekly = await events_mod.events_for_week(
+            session, state.guild_id, current_day
+        )
+        report.rolled_events = [event.blurb for event in weekly]
 
-    if not gameday.is_business_day(new_day):
-        # Closed tick: weekend. Only auto clock-out (step 7).
+    if not gameday.is_business_day(current_day):
+        # Closed date: no production or pay.  Clearing stale attendance is safe
+        # and catch-up then advances through each missed weekend date.
         await _clock_out_all(session, state.guild_id)
         report.closed = True
+        await _advance_day(session, state, rng=rng)
         return report
 
     # ---- Step 2: today's sentiment (read from the events table) ----------
     multipliers = await events_mod.active_multipliers(
-        session, state.guild_id, new_day
+        session, state.guild_id, current_day
     )
     report.todays_events = [
-        e.blurb for e in await events_mod._events_on(session, state.guild_id, new_day)
+        e.blurb for e in await events_mod._events_on(session, state.guild_id, current_day)
     ]
 
     # ---- Step 3: vest equity grants → holdings ---------------------------
@@ -164,14 +170,14 @@ async def run_tick(
         amount = int(math.floor(tent * ratio)) if ratio < 1.0 else tent
         realized[cid] = amount
         await money.realize_revenue(
-            session, state, company_by_id[cid], amount, new_day
+            session, state, company_by_id[cid], amount, current_day
         )
         report.total_realized_revenue += amount
 
     # ---- Step 5: pay payroll (private) -----------------------------------
     for company in private:
         result = await _pay_private_payroll(
-            session, state, company, workers[company.id], new_day,
+            session, state, company, workers[company.id], current_day,
             sentiment=multipliers.get(company.industry, 1.0),
             tentative_revenue=tentative[company.id],
             realized_revenue=realized[company.id],
@@ -183,12 +189,31 @@ async def run_tick(
             report.bankruptcies.append(result.ticker)
 
     # ---- Step 5b: pay payroll (state, straight from the pool) ------------
-    await _pay_state_payroll(session, state, new_day, report)
+    await _pay_state_payroll(session, state, current_day, report)
 
     # ---- Step 7: auto clock-out ------------------------------------------
     await _clock_out_all(session, state.guild_id)
 
+    # The close belongs to current_day.  Snapshot it before changing the state
+    # cursor so valuation can reproduce the exact historical close.
+    await valuation.record_closes(session, state)
+    await _advance_day(session, state, rng=rng)
+
     return report
+
+
+async def _advance_day(
+    session: AsyncSession,
+    state: ServerState,
+    *,
+    rng: random.Random | None,
+) -> None:
+    """Advance the persisted cursor and prepare a newly opened Monday."""
+    new_day = gameday.next_day(state.game_day)
+    state.game_day = new_day
+    state.weekday = gameday.weekday_name(new_day)
+    if gameday.is_monday(new_day):
+        await events_mod.roll_weekly_events(session, state, new_day, rng=rng)
 
 
 async def _vest_grants(session: AsyncSession, state: ServerState) -> int:
@@ -310,6 +335,7 @@ async def _bankrupt(
     void offers, close jobs, wipe holdings, end employment, deactivate."""
     await money.return_treasury_to_pool(session, state, company, game_day)
     await lifecycle.void_offers_involving(session, company)
+    await lifecycle.close_funding_rounds(session, company)
     await lifecycle.close_jobs(session, company)
     await lifecycle.wipe_holdings(session, company)
     await lifecycle.end_all_employment(session, company)

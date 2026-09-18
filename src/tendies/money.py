@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import gameday
+from .errors import BadInput
 from .models import (
     Company,
     ServerState,
@@ -34,6 +35,10 @@ from .models import (
     treasury_acct,
     wallet_acct,
 )
+
+# SQLite INTEGER values are signed 64-bit. Reject larger user-controlled values
+# at the service edge instead of letting a flush fail with an opaque OverflowError.
+MAX_INT64 = (1 << 63) - 1
 
 # Transaction types whose amounts count as a player's income for the gate.
 INCOME_TX_TYPES = ("wage", "state_wage", "dividend")
@@ -166,15 +171,17 @@ async def inject_capital(
     company: Company,
     amount: int,
     game_day: dt.date,
+    *,
+    tx_type: str = "invest",
 ) -> None:
-    """wallet -> treasury (investment). Not taxed; it's capital, not income."""
+    """wallet -> treasury (investment or owner deposit). Capital is not income."""
     investor.wallet -= amount
     company.treasury += amount
     record_tx(
         session,
         guild_id=state.guild_id,
         game_day=game_day,
-        type="invest",
+        type=tx_type,
         amount=amount,
         src=wallet_acct(investor.user_id),
         dst=treasury_acct(company.id),
@@ -421,6 +428,13 @@ async def print_money(
     inflation index by ``index *= (1 + amount / supply_before)``. Returns the
     new inflation index. Money supply rises by exactly ``amount``."""
     supply_before = await money_supply(session, state.guild_id)
+    if (
+        isinstance(amount, bool)
+        or not isinstance(amount, int)
+        or amount <= 0
+        or amount > MAX_INT64 - supply_before
+    ):
+        raise BadInput("That print would make the money supply too large to store safely.")
     if supply_before > 0:
         state.inflation_index = state.inflation_index * (1 + amount / supply_before)
     state.pool_balance += amount

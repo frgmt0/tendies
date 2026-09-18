@@ -1,9 +1,8 @@
 """Tick scheduler.
 
-Advances every guild's economy by one game day each cadence
-(``TICK_INTERVAL_SECONDS``) and posts a daily-close announcement. Game time
-lives in the database, so a restart resumes from the right day — the scheduler
-only decides *when* to advance, never *what day it is*.
+Settles each guild at midnight in the configured server-local IANA timezone.
+The persisted ``game_day`` is the open-date cursor, so startup and periodic
+catch-up can recover missed closes without paying the same date twice.
 """
 
 from __future__ import annotations
@@ -13,6 +12,8 @@ import logging
 
 import discord
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.calendarinterval import CalendarIntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from . import emojis
@@ -25,61 +26,160 @@ from .tick import TickReport
 log = logging.getLogger("tendies.scheduler")
 
 
+def midnight_trigger(timezone, *, start_date: dt.date | None = None):
+    """The DST-aware production close trigger (kept testable in isolation).
+
+    APScheduler 3's ``CronTrigger`` can skip the midnight after a spring DST
+    change when used with ``zoneinfo``.  ``CalendarIntervalTrigger`` advances
+    by civil dates and reliably emits every local midnight.
+    """
+    return CalendarIntervalTrigger(
+        days=1,
+        hour=0,
+        minute=0,
+        start_date=start_date,
+        timezone=timezone,
+    )
+
+
 class TickScheduler:
     def __init__(self, bot):
         self.bot = bot
-        self._sched = AsyncIOScheduler()
+        self.timezone = gameday.calendar_timezone(
+            getattr(bot.settings, "calendar_timezone", None)
+        )
+        self.accelerated = bool(getattr(bot.settings, "accelerated_mode", False))
+        self._sched = AsyncIOScheduler(timezone=self.timezone)
 
     def start(self) -> None:
-        interval = max(5, int(self.bot.settings.tick_interval_seconds))
-        self._sched.add_job(
-            self.tick_all_guilds,
-            "interval",
-            seconds=interval,
-            id="tendies-tick",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        # Reminder sweep runs on the same cadence but phase-shifted to roughly
-        # mid-day, so opted-in players get nudged with time left to clock in
-        # before the close. Deduped per game day, so the exact phase is harmless.
-        offset = max(5, interval // 2)
-        self._sched.add_job(
-            self.remind_all_guilds,
-            "interval",
-            seconds=interval,
-            id="tendies-reminder",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            next_run_time=dt.datetime.now() + dt.timedelta(seconds=offset),
-        )
+        if self.accelerated:
+            interval = max(5, int(self.bot.settings.tick_interval_seconds))
+            self._sched.add_job(
+                self.tick_all_guilds,
+                "interval",
+                seconds=interval,
+                id="tendies-tick",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            self._sched.add_job(
+                self.remind_all_guilds,
+                "interval",
+                seconds=interval,
+                id="tendies-reminder",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                next_run_time=dt.datetime.now(self.timezone)
+                + dt.timedelta(seconds=max(5, interval // 2)),
+            )
+            description = f"accelerated every {interval}s"
+        else:
+            # CalendarIntervalTrigger advances by local civil dates and follows
+            # 23/25-hour DST days. A fixed 86,400-second interval does not.
+            self._sched.add_job(
+                self.tick_all_guilds,
+                midnight_trigger(self.timezone),
+                id="tendies-tick",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            # Retry/reconcile frequently as well. The midnight trigger is the
+            # exact close, while this sweep recovers a transient midnight DB or
+            # process failure without waiting for another day or user command.
+            self._sched.add_job(
+                self.tick_all_guilds,
+                "interval",
+                seconds=60,
+                id="tendies-catchup",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            self._sched.add_job(
+                self.remind_all_guilds,
+                CronTrigger(day_of_week="mon-fri", hour=12, minute=0,
+                            timezone=self.timezone),
+                id="tendies-reminder",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            description = f"calendar midnight in {self.timezone.key}"
         self._sched.start()
-        log.info("Tick scheduler started (every %ds; reminders +%ds).", interval, offset)
+        log.info("Tick scheduler started (%s).", description)
 
     def shutdown(self) -> None:
         if self._sched.running:
             self._sched.shutdown(wait=False)
 
     async def tick_all_guilds(self) -> None:
-        """Run one game-day tick for every guild that has an economy."""
+        """Settle every guild through the current local calendar date."""
         async with self.bot.db.session() as session:
             guild_ids = (await session.execute(select(ServerState.guild_id))).scalars().all()
 
         for guild_id in guild_ids:
             try:
-                report = await self.run_one(guild_id)
+                if self.accelerated:
+                    report = await self.run_one(guild_id)
+                    reports = [report] if report is not None else []
+                else:
+                    reports = await self.synchronize_guild(guild_id)
             except Exception:
                 log.exception("Tick failed for guild %s", guild_id)
                 continue
-            # Announcing is best-effort: a failure here (e.g. no sendable
-            # channel) must never starve the remaining guilds' ticks.
-            if report is not None and not report.closed:
+            business_reports = [report for report in reports if not report.closed]
+            # A long outage may reconcile many business dates. Announce only
+            # the latest close so recovery cannot flood the server channel.
+            if business_reports:
+                report = business_reports[-1]
                 try:
                     await self.announce(guild_id, report)
                 except Exception:
                     log.exception("Announce failed for guild %s", guild_id)
+
+    async def catch_up_all_guilds(self) -> None:
+        """Startup recovery for every persisted guild (calendar mode only).
+
+        Unlike the periodic sweep, startup is strict: readiness waits until all
+        missed closes commit, and a database failure aborts startup visibly.
+        """
+        if self.accelerated:
+            return
+        async with self.bot.db.session() as session:
+            guild_ids = (
+                await session.execute(select(ServerState.guild_id))
+            ).scalars().all()
+        for guild_id in guild_ids:
+            await self.synchronize_guild(guild_id)
+
+    async def synchronize_guild(
+        self, guild_id: int, *, target_day: dt.date | None = None
+    ) -> list[TickReport]:
+        """Idempotently settle missed dates until ``target_day`` is open.
+
+        Only recorded attendance on the first missed business date can be paid;
+        each settlement clocks everyone out, so downtime never fabricates work.
+        """
+        target = target_day or gameday.local_date(
+            getattr(self.bot.settings, "calendar_timezone", None)
+        )
+        async with self.bot.db.session() as session:
+            state = (
+                await session.execute(
+                    select(ServerState)
+                    .where(ServerState.guild_id == guild_id)
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if state is None:
+                return []
+            reports: list[TickReport] = []
+            while state.game_day < target:
+                reports.append(await tick.run_tick(session, state))
+            return reports
 
     async def run_one(self, guild_id: int) -> TickReport | None:
         async with self.bot.db.session() as session:

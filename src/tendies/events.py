@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import emojis, gameday
+from . import emojis
 from .config import INDUSTRIES, MAX_EVENTS_PER_WEEK
 from .models import Event, ServerState
 
@@ -76,6 +76,7 @@ async def roll_weekly_events(
     week_monday: dt.date,
     *,
     rng: random.Random | None = None,
+    not_before: dt.date | None = None,
 ) -> list[Event]:
     """Roll 0–``MAX_EVENTS_PER_WEEK`` events for the business week starting at
     ``week_monday``, persisting them. Returns the created events.
@@ -86,6 +87,10 @@ async def roll_weekly_events(
     rng = rng or random.Random()
     count = rng.randint(0, MAX_EVENTS_PER_WEEK)
     days = _business_days_of_week(week_monday)
+    if not_before is not None:
+        days = [day for day in days if day >= not_before]
+    if not days:
+        return []
     created: list[Event] = []
     used: set[tuple[dt.date, str]] = set()
     attempts = 0

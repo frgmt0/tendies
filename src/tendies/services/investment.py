@@ -11,11 +11,12 @@ ORM objects and route all money through :mod:`tendies.money`, and never commit
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import lifecycle, lookups, money
+from .. import gameday, lifecycle, lookups, money
 from ..config import (
     ACCREDITED_THRESHOLD,
     BUSINESS_DAYS_PER_YEAR,
@@ -24,6 +25,20 @@ from ..config import (
 from ..errors import BadInput, InsufficientFunds, NotAllowed, NotFound
 from ..formatting import fmt
 from ..models import FundingRound, Holding, ServerState
+
+
+def _require_business_day(state: ServerState) -> None:
+    if not gameday.is_business_day(state.game_day):
+        raise NotAllowed(
+            "Financial operations are closed for the weekend. Try again Monday."
+        )
+
+
+def _require_positive_int64(value: int, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise BadInput(f"{label} must be a positive whole number.")
+    if value > money.MAX_INT64:
+        raise BadInput(f"{label} is too large to store safely.")
 
 
 # ---------------------------------------------------------------------------
@@ -63,10 +78,9 @@ async def open_round(
     )
     lookups.require_owner(company, owner_id)
 
-    if not (0 < equity_pct < 100):
+    if not math.isfinite(equity_pct) or not (0 < equity_pct < 100):
         raise BadInput("Equity percentage must be between 0 and 100 (exclusive).")
-    if amount <= 0:
-        raise BadInput("Raise amount must be positive.")
+    _require_positive_int64(amount, "Raise amount")
 
     existing = (
         await session.execute(
@@ -88,6 +102,8 @@ async def open_round(
             "That equity stake is too small to mint a single share at this "
             "company's size — raise the percentage."
         )
+    if new_shares > money.MAX_INT64 - company.total_shares:
+        raise BadInput("That round would create too many shares to store safely.")
     implied_valuation = amount / (equity_pct / 100)
 
     round_ = FundingRound(
@@ -138,6 +154,9 @@ async def invest(
     ``BUSINESS_DAYS_PER_YEAR``-day year; below ``ACCREDITED_THRESHOLD`` the
     purchase is refused (:class:`NotAllowed`).
     """
+    _require_business_day(state)
+    _require_positive_int64(amount, "Investment amount")
+
     # Accredited-investor gate (§11).
     trailing = await money.trailing_income(
         session, state.guild_id, investor_id, state.game_day, INCOME_WINDOW_DAYS
@@ -163,9 +182,6 @@ async def invest(
     if round_ is None:
         raise NotFound(f"**{company.ticker}** has no open funding round.")
 
-    if amount <= 0:
-        raise BadInput("Investment amount must be positive.")
-
     remaining = round_.amount - round_.amount_raised
     if remaining <= 0:
         round_.status = "closed"
@@ -182,11 +198,14 @@ async def invest(
 
     # Shares for this tranche; if this contribution completes the round, hand the
     # exact remainder so the mint matches total_new_shares with no rounding drift.
-    fully_funded = round_.amount_raised + contribution >= round_.amount
-    if fully_funded:
-        shares = round_.total_new_shares - round_.shares_minted
-    else:
-        shares = (round_.total_new_shares * contribution) // round_.amount
+    funded_after = round_.amount_raised + contribution
+    fully_funded = funded_after >= round_.amount
+    target_minted = (
+        round_.total_new_shares
+        if fully_funded
+        else (round_.total_new_shares * funded_after) // round_.amount
+    )
+    shares = target_minted - round_.shares_minted
 
     # Refuse a contribution too small to buy even one share — otherwise the
     # investor would be charged for nothing (the money would land in the
@@ -195,6 +214,10 @@ async def invest(
         raise BadInput(
             "That amount is too small to buy any shares in this round — invest more."
         )
+    if company.total_shares > money.MAX_INT64 - shares:
+        raise BadInput("This investment would create too many shares to store safely.")
+    if company.treasury > money.MAX_INT64 - contribution:
+        raise BadInput("The company treasury is too large to accept that investment.")
 
     company.total_shares += shares
 
@@ -223,6 +246,86 @@ async def invest(
         pct_of_company=pct,
         round_closed=round_closed,
     )
+
+
+@dataclass
+class CloseRoundResult:
+    ticker: str
+    amount_raised: int
+    target_amount: int
+    shares_minted: int
+
+
+async def close_round(
+    session: AsyncSession,
+    state: ServerState,
+    actor_id: int,
+    ticker: str,
+    *,
+    manager: bool = False,
+) -> CloseRoundResult:
+    """Close an open round, preserving completed investments and minted shares.
+
+    The owner may close their own round. Manager authority must be passed
+    explicitly by the command layer.
+    """
+    company = await lookups.get_company(
+        session, state.guild_id, ticker, private_only=True
+    )
+    if company.owner_id != actor_id and not manager:
+        raise NotAllowed(
+            f"Only the owner of **{company.ticker}** or a Manager can close that round."
+        )
+    round_ = (
+        await session.execute(
+            select(FundingRound).where(
+                FundingRound.company_id == company.id,
+                FundingRound.status == "open",
+            )
+        )
+    ).scalars().first()
+    if round_ is None:
+        raise NotFound(f"**{company.ticker}** has no open funding round.")
+    round_.status = "closed"
+    return CloseRoundResult(
+        ticker=company.ticker,
+        amount_raised=round_.amount_raised,
+        target_amount=round_.amount,
+        shares_minted=round_.shares_minted,
+    )
+
+
+@dataclass
+class DepositResult:
+    ticker: str
+    amount: int
+    treasury_after: int
+
+
+async def deposit(
+    session: AsyncSession,
+    state: ServerState,
+    owner_id: int,
+    ticker: str,
+    amount: int,
+) -> DepositResult:
+    """Transfer an owner's existing wallet funds into their company treasury."""
+    _require_positive_int64(amount, "Deposit amount")
+    company = await lookups.get_company(
+        session, state.guild_id, ticker, private_only=True
+    )
+    lookups.require_owner(company, owner_id)
+    owner = await money.get_or_create_user(session, state.guild_id, owner_id)
+    if owner.wallet < amount:
+        raise InsufficientFunds(
+            f"You need {fmt(amount)} nug, but your wallet holds {fmt(owner.wallet)} nug."
+        )
+    if company.treasury > money.MAX_INT64 - amount:
+        raise BadInput("The company treasury is too large to accept that deposit.")
+    await money.inject_capital(
+        session, state, owner, company, amount, state.game_day, tx_type="deposit"
+    )
+    return DepositResult(company.ticker, amount, company.treasury)
 
 
 # ---------------------------------------------------------------------------
@@ -256,13 +359,13 @@ async def pay_dividend(
 ) -> DividendResult:
     """Distribute ``amount`` from the company treasury pro-rata across the cap
     table, taxed like wages (§12). Owner only."""
+    _require_business_day(state)
+    _require_positive_int64(amount, "Dividend amount")
     company = await lookups.get_company(
         session, state.guild_id, ticker, private_only=True
     )
     lookups.require_owner(company, owner_id)
 
-    if amount <= 0:
-        raise BadInput("Dividend amount must be positive.")
     if amount > company.treasury:
         raise InsufficientFunds(
             f"**{company.ticker}**'s treasury holds {fmt(company.treasury)} nug — "
@@ -270,6 +373,8 @@ async def pay_dividend(
         )
 
     holders = await lifecycle.cap_table(session, company)
+    if not holders:
+        raise BadInput(f"**{company.ticker}** has no shareholders to pay.")
     shares_by_user = {uid: sh for uid, sh in holders}
 
     results = await money.payout_prorata(

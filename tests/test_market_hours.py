@@ -31,12 +31,12 @@ async def _company_on_friday(w):
     await companies.hire(w.session, state, OWNER, "WKD", apps[0].application_id)
     await w.session.flush()
 
-    # One producing day so the company has revenue history (Monday -> Tuesday).
+    # One producing day so the company has revenue history.
     await employment.clock_in(w.session, state, WORKER)
     await w.session.flush()
     await w.tick()
 
-    # Jump the calendar to Friday so the next tick is a weekend (Saturday).
+    # Jump the calendar to Friday; Friday itself must settle before Saturday.
     await w.set_weekday("friday")
     await w.clear_events()
     assert state.weekday == "friday"
@@ -52,14 +52,25 @@ async def test_weekend_tick_is_closed_and_freezes_prices(world):
     open_val = await valuation.company_valuation(w.session, state, company)
     assert open_val.frozen is False
 
-    # Worker clocks in on Friday; the tick lands on Saturday (closed).
+    # Worker clocks in on Friday; Friday is paid before the cursor advances.
     await employment.clock_in(w.session, state, WORKER)
     await w.session.flush()
 
-    pool_before = state.pool_balance
-    treasury_before = company.treasury
     worker_wallet_before = await w.wallet(WORKER)
 
+    friday = await w.tick()
+
+    assert friday.closed is False
+    assert friday.game_day.weekday() == 4
+    assert friday.total_payroll == 1_000
+    assert friday.total_realized_revenue > 0
+    assert await w.wallet(WORKER) > worker_wallet_before
+    assert gameday.is_weekend(state.game_day)
+
+    # Settling Saturday is a closed tick and cannot repeat Friday's pay.
+    pool_after_friday = state.pool_balance
+    treasury_after_friday = company.treasury
+    wallet_after_friday = await w.wallet(WORKER)
     report = await w.tick()
 
     assert report.closed is True
@@ -70,9 +81,9 @@ async def test_weekend_tick_is_closed_and_freezes_prices(world):
     assert report.total_realized_revenue == 0
     assert report.total_payroll == 0
     assert report.state_payroll_paid == 0
-    assert state.pool_balance == pool_before
-    assert company.treasury == treasury_before
-    assert await w.wallet(WORKER) == worker_wallet_before
+    assert state.pool_balance == pool_after_friday
+    assert company.treasury == treasury_after_friday
+    assert await w.wallet(WORKER) == wallet_after_friday
 
     # Still employed (employment_summary would raise NotFound otherwise), and
     # auto clock-out still happens on the closed tick.

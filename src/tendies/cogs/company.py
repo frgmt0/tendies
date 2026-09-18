@@ -35,6 +35,7 @@ _INDUSTRY_LABELS = {
 
 #: a/b/c… index letters for the applicant list.
 _LETTERS = "abcdefghijklmnopqrstuvwxyz"
+DISPLAY_ROWS = 20
 
 
 def _industry_label(industry: str) -> str:
@@ -125,8 +126,10 @@ class CompanyCog(commands.Cog, name="Companies"):
                 if jobs:
                     lines.append("")
                     lines.append("**Open jobs:**")
-                    for job in jobs:
+                    for job in jobs[:DISPLAY_ROWS]:
                         lines.append(f"  • {job.title} — {fmt(job.daily_wage)} nug/day")
+                    if len(jobs) > DISPLAY_ROWS:
+                        lines.append(f"  … and {len(jobs) - DISPLAY_ROWS} more open roles")
                 else:
                     lines.append("")
                     lines.append("No open jobs right now.")
@@ -138,9 +141,13 @@ class CompanyCog(commands.Cog, name="Companies"):
                 lines.append(f"Owner: {mention(co.owner_id)}")
                 lines.append(f"Treasury: {fmt(co.treasury)} nug")
                 lines.append(f"Shares: {fmt(co.total_shares)} total")
-                for uid, shares in detail.cap_table:
+                for uid, shares in detail.cap_table[:DISPLAY_ROWS]:
                     lines.append(
                         f"  {mention(uid)} ... {fmt(shares)} ({shares_pct(shares, co.total_shares)})"
+                    )
+                if len(detail.cap_table) > DISPLAY_ROWS:
+                    lines.append(
+                        f"  … and {len(detail.cap_table) - DISPLAY_ROWS} more shareholders"
                     )
                 lines.append(
                     f"Employees clocked in today: {detail.clocked_in} / {detail.total_employees}"
@@ -226,7 +233,8 @@ class CompanyCog(commands.Cog, name="Companies"):
             embed=discordutil.embed(
                 f"{emojis.HIRING} Posted: {display_ticker} — {job_title} — "
                 f"{fmt(daily_wage)} nug/day{equity_clause}.",
-                f"Job ID {job_id}. Applicants will show in `$applicants {display_ticker}`.",
+                f"Job ID {job_id}. Applicants will show in `$applicants {display_ticker}`. "
+                "This role stays open and can be used for multiple hires.",
             )
         )
 
@@ -255,7 +263,8 @@ class CompanyCog(commands.Cog, name="Companies"):
             return
 
         lines: list[str] = []
-        for i, app in enumerate(applicants):
+        visible = applicants[:DISPLAY_ROWS]
+        for i, app in enumerate(visible):
             letter = _LETTERS[i] if i < len(_LETTERS) else str(i + 1)
             lines.append(
                 f"{letter}) {mention(app.user_id)} — "
@@ -265,10 +274,15 @@ class CompanyCog(commands.Cog, name="Companies"):
             )
         first = _LETTERS[0]
         last = (
-            _LETTERS[len(applicants) - 1]
-            if len(applicants) <= len(_LETTERS)
-            else str(len(applicants))
+            _LETTERS[len(visible) - 1]
+            if len(visible) <= len(_LETTERS)
+            else str(len(visible))
         )
+        if len(applicants) > DISPLAY_ROWS:
+            lines.append(
+                f"… showing {DISPLAY_ROWS} of {len(applicants)} pending applicants; "
+                "hire anyone omitted by @mention."
+            )
         lines.append("")
         lines.append(
             f"`$hire {display_ticker} {first}`"
