@@ -37,7 +37,7 @@ def midnight_trigger(timezone, *, start_date: dt.date | None = None):
         days=1,
         hour=0,
         minute=0,
-        start_date=start_date,
+        start_date=start_date or (dt.datetime.now(timezone).date() + dt.timedelta(days=1)),
         timezone=timezone,
     )
 
