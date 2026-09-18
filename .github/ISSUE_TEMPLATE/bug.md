@@ -2,7 +2,7 @@
 name: Bug report
 about: Report a reproducible gameplay or deployment problem
 title: ''
-labels: ''
+labels: bug
 assignees: ''
 ---
 

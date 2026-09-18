@@ -42,6 +42,8 @@ Production uses the **host server's local calendar**, including its timezone and
 
 `server_state.game_day` is the current unsettled date. Closing settles that date **before** advancing it. Friday's attendance is paid at the Friday close (Saturday midnight); the Saturday and Sunday closes do not produce or pay wages. Monday opens at local Monday midnight.
 
+If calendar-mode startup finds `game_day` *ahead* of the host's local today — the residue of an accelerated playtest or a `$setday` — it logs a WARNING naming both dates and snaps the cursor back to today without settling anything: no closes, no payouts, no invented attendance. Without that snap-back the cursor would never reach today again and no date would ever close.
+
 The scheduler checks persisted dates and catches up after restart. Each recovery batch commits its closes and cursor advances in one database transaction. A repeated check of an already-current date does nothing. Recorded attendance can be paid only once; catch-up never invents attendance for offline days. Missed business days still advance vesting and revenue history. A failure rolls back that close and leaves it eligible for retry. Commands synchronize the calendar before acting, so late scheduler execution does not admit a weekday action into a stale day.
 
 Markets are closed on weekends: no clock-ins, production, wages, investments, dividend execution, or acquisition acceptance. Founding, job management, funding-round preparation, and sending offers remain available. Financial commands explain that users must retry Monday; **there is no queued order or guaranteed Monday execution**. Existing companies retain their last business close on the valuation board. New companies without a close show an initial quote.
@@ -52,7 +54,7 @@ Production ignores `TICK_INTERVAL_SECONDS` in normal calendar mode. `GAME_TIME_M
 
 Each new week rolls zero to two events, with a business date, industry (or whole market), multiplier, and headline. Initial bootstrap establishes the current week's calendar. Weekly rolling must not duplicate on restarts.
 
-An event affects its own business day's production and live valuation. `$event <industry|all> <multiplier> <headline>` creates an event for the current date. Multipliers must be finite and greater than zero, with a 100× ceiling. The current-date event is included when that same date closes; advancing first would wrongly miss it. Multiple active event multipliers combine according to `events.active_multipliers`.
+An event affects its own business day's production and live valuation. `$event <industry|all> <multiplier> <headline>` creates an event for the current date. Multipliers must be finite and greater than zero, with a 100× ceiling, validated in the service and not only in the cog. A second admin event for the same (date, industry) **replaces** the first rather than stacking, and the combined multiplier for a day is clamped to [0.01, 100], so repeated `$event` calls cannot compound without bound. The current-date event is included when that same date closes; advancing first would wrongly miss it. Multiple active event multipliers combine according to `events.active_multipliers`.
 
 Events influence operating decisions and the attractiveness of equity funding. They do not create a secondary market or a way to sell holdings on demand.
 
@@ -88,7 +90,7 @@ Defaults produce fees of 50K, 200K, 800K, and 3.2M. The fee returns to the pool.
 
 ## 9. Jobs and the daily close
 
-Owners post a title, description, wage, and optional share grant/vesting duration with `$postjob`. A private posting is a **reusable hiring role**, not an implicit one-person seat; owners review applicants and control hiring. This makes expansion an intentional owner action. Application listings and Discord output must stay within platform message limits.
+Owners post a title, description, wage, and optional share grant/vesting duration with `$postjob`. A single posting's grant may not exceed 10% of the company's total shares at posting time, and any grant must vest over at least 5 business days. An owner cannot apply to or be hired into their own company; both the apply and hire paths refuse it. Together these stop a founder from self-hiring a 1-day billion-share grant and diluting investors to nothing. A private posting is a **reusable hiring role**, not an implicit one-person seat; owners review applicants and control hiring. This makes expansion an intentional owner action. Application listings and Discord output must stay within platform message limits.
 
 Each clocked-in worker produces their fixed productivity (default 12,000 nug), adjusted by that day's industry event, and costs the agreed wage. A company with excessive wages can fail even if its treasury began the day solvent.
 
@@ -123,9 +125,9 @@ new_shares = round(existing_shares × percentage / (100 - percentage))
 
 With 1,000,000 existing shares, offering 10% mints 111,111 new shares at full subscription, not another million. Integer rounding is explicit. Investments move wallet cash into the treasury and mint the corresponding portion; no unpurchased shares are issued. A fully subscribed round closes automatically. `$closeround <ticker>` lets the owner or a Manager close an unfinished round, retaining contributions and shares already issued; it does not refund completed investments.
 
-`$invest` requires annualized qualifying income of at least 200,000 nug, based on the trailing 30 business-day income window and 250-business-day annualization. Qualifying income is defined by the ledger's wage/dividend categories; deposits and acquisition proceeds do not manufacture eligibility. Read the live `$help invest` and service calculation for exact current eligibility.
+`$invest` requires annualized qualifying income of at least 200,000 nug, based on the trailing 30 business-day income window and 250-business-day annualization. Qualifying income is defined by the ledger's wage/dividend categories; deposits and acquisition proceeds do not manufacture eligibility. A dividend paid by a company the recipient owns is excluded too — otherwise an owner could deposit their own cash, pay it back to themselves, and buy accreditation with money they already had. Read the live `$help invest` and service calculation for exact current eligibility.
 
-An investor cannot buy more than the remaining round. Tiny inputs that would buy no shares are rejected. Buying shares is subject to the weekday gate. There is no `$sell`, transfer marketplace, bid/ask spread, or market-maker redemption in v1.
+A company's owner cannot invest in their own round; `$deposit` is the owner's funding path. An investor cannot buy more than the remaining round. Tiny inputs that would buy no shares are rejected. Buying shares is subject to the weekday gate. There is no `$sell`, transfer marketplace, bid/ask spread, or market-maker redemption in v1.
 
 ## 12. Dividends and tax
 
@@ -152,7 +154,7 @@ Weekend quotes retain the previous close, including Friday's event sentiment. A 
 
 ## 14. Acquisitions
 
-`$acquire <acquirer> <target> <amount>` creates or replaces the pair's open offer; money is not reserved until acceptance. `$accept <acquirer> [target]` resolves an offer to a company owned by the caller; if the acquirer has offered on several companies owned by that caller, the target argument is required. `$decline <acquirer> [target]` rejects an offer with the same disambiguation rule. Acceptance is a weekday operation and revalidates ownership, activity, and available funds.
+`$acquire <acquirer> <target> <amount>` creates or replaces the pair's open offer; money is not reserved until acceptance. An offer is refused when the same player owns both companies (self-dealing would let a founder buy out their own investors at a price they set), and the amount must be at least the target's current treasury — the acquirer absorbs that cash on close, so a lower price would cash shareholders out below book value. `$accept <acquirer> [target]` resolves an offer to a company owned by the caller; if the acquirer has offered on several companies owned by that caller, the target argument is required. `$decline <acquirer> [target]` rejects an offer with the same disambiguation rule. Acceptance is a weekday operation and revalidates ownership, activity, and available funds.
 
 Acceptance atomically distributes the acquirer's payment pro-rata to all target shareholders, with tax; transfers the target treasury and open job listings to the acquirer; terminates all target employment and unvested grants; voids other offers/rounds; wipes the target holdings and share count; and deactivates the target. Employees do not transfer and must reapply. There is no severance in v1.
 
@@ -166,7 +168,11 @@ Owner/business commands: `$found`, `$company`, `$postjob`, `$applicants`, `$hire
 
 Information: `$market [page]` (`$stocks`), `$leaderboard` (`$rich`), `$pool`, `$today`.
 
-Managers: `$print`, `$taxrate`, `$event`, `$stats` (`$macro`, `$dashboard`). `$setday` and `$forcetick` are accelerated-development-only. Manager means the configured role or Manage Server permission. Every permission check is enforced on the server, never trusted from a UI button.
+Managers: `$print`, `$taxrate`, `$event`, `$stats` (`$macro`, `$dashboard`). `$setday` and `$forcetick` are accelerated-development-only, and the `$help` landing page hides them outside accelerated mode so a Manager isn't pointed at controls that would just refuse them. Manager means the configured role or Manage Server permission. Every permission check is enforced on the server, never trusted from a UI button.
+
+Every percent argument (`$taxrate`, `$raise`, `$promote`) shares one parser: a trailing `%` is optional and purely cosmetic, and a bare number is always read as whole percentage units, never a fraction — `10`, `10%`, and `0.5` all parse as percent, so `$taxrate 0.15` sets 0.15%, not 15%.
+
+The bot suppresses `@everyone`/role/user mentions globally; the sole exception is `$apply`, which explicitly re-enables a mention of the hiring company's owner so they're notified of a new applicant. Confirmation prompts (`$print`, `$quit`, ...) default to a ✅ reaction; if the bot lacks Add Reactions in the channel, the prompt falls back to a typed `yes`/`no` reply from the command's author instead of failing outright. If the bot lacks Embed Links, command replies fall back to a plain-text permission hint asking a moderator to grant it, rather than silently dropping the response.
 
 `/bug` opens a small modal for summary, reproduction details, and expected behavior. Its response is private to the caller and links to a prefilled public GitHub issue. The player reviews and submits using their own GitHub account; the bot holds no GitHub write credential and does not silently publish reports. Reports include the release identifier, not tokens, message histories, or automatically collected user/guild IDs. Form invocation is rate limited. Reports should avoid private information.
 

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import func, select
 
 from tendies.config import STARTING_POOL
-from tendies.errors import InsufficientFunds
+from tendies.errors import BadInput, InsufficientFunds
 from tendies.models import Employment, Holding, Job
 from tendies.services import acquisitions, companies, employment
 
@@ -183,3 +183,25 @@ async def test_accept_fails_if_treasury_insufficient(world):
 
     with pytest.raises(InsufficientFunds):
         await acquisitions.accept(w.session, state, TGT_OWNER, "ACQ")
+
+
+async def test_accept_rechecks_the_book_value_floor(world):
+    """The target can deposit into its treasury after the offer was made. If
+    acceptance didn't re-check, its own cap table would be cashed out below the
+    cash the acquirer is about to absorb."""
+    w = world
+    state = w.state
+    acquirer, target = await _build(w)
+
+    amount = 10_000_000
+    await acquisitions.offer(w.session, state, ACQ_OWNER, "ACQ", "TGT", amount)
+    await w.session.flush()
+
+    # Target's treasury grows past the standing offer (conserving transfer).
+    state.pool_balance -= 20_000_000
+    target.treasury += 20_000_000
+    await w.session.flush()
+
+    with pytest.raises(BadInput) as err:
+        await acquisitions.accept(w.session, state, TGT_OWNER, "ACQ")
+    assert "at least that much" in str(err.value)

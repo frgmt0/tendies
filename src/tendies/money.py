@@ -21,7 +21,7 @@ from __future__ import annotations
 import datetime as dt
 from decimal import ROUND_FLOOR, Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import gameday
@@ -479,15 +479,29 @@ async def trailing_income(
     window_days: int,
 ) -> int:
     """Sum of wages + dividends a user received over the trailing
-    ``window_days`` business days (inclusive of the current day)."""
+    ``window_days`` business days (inclusive of the current day).
+
+    A dividend paid by a company the recipient *owns* does not count (§11): an
+    owner can deposit their own cash, pay it back out to themselves, and the
+    round trip would otherwise manufacture accredited-investor eligibility out
+    of money they already had.
+    """
     cutoff = gameday.business_days_before(current_game_day, window_days - 1)
     total = await session.scalar(
-        select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+        select(func.coalesce(func.sum(Transaction.amount), 0))
+        .select_from(Transaction)
+        .outerjoin(Company, Transaction.company_id == Company.id)
+        .where(
             Transaction.guild_id == guild_id,
             Transaction.user_id == user_id,
             Transaction.type.in_(INCOME_TX_TYPES),
             Transaction.game_day >= cutoff,
             Transaction.game_day <= current_game_day,
+            or_(
+                Transaction.type != "dividend",
+                Company.owner_id.is_(None),
+                Company.owner_id != user_id,
+            ),
         )
     )
     return int(total or 0)
@@ -501,13 +515,22 @@ async def avg_daily_revenue(
 ) -> float:
     """Mean realized daily revenue for a company over the trailing
     ``window_days`` business days. Averages over the revenue rows that exist
-    (one per active business day, possibly 0); returns 0.0 if none."""
+    (one per active business day, possibly 0); returns 0.0 if none.
+
+    Company ids are globally unique, but the ledger is also guild-scoped, so the
+    query pins ``Transaction.guild_id`` to the company's own guild (§16: a guild
+    filter at every lookup boundary). Defense in depth against a cross-guild id.
+    """
     cutoff = gameday.business_days_before(current_game_day, window_days - 1)
+    company_guild = (
+        select(Company.guild_id).where(Company.id == company_id).scalar_subquery()
+    )
     rows = (
         await session.execute(
             select(Transaction.amount).where(
                 Transaction.type == "revenue",
                 Transaction.company_id == company_id,
+                Transaction.guild_id == company_guild,
                 Transaction.game_day >= cutoff,
                 Transaction.game_day <= current_game_day,
             )

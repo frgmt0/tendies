@@ -40,6 +40,7 @@ class Market(commands.Cog):
         async with self.bot.db.session() as session:
             state = await lookups.get_state(session, ctx.guild.id)
             rows = await valuation.market_table(session, state)
+            rounds = await self._open_rounds(session, state.guild_id)
             open_market = gameday.is_business_day(state.game_day)
             weekday = gameday.weekday_name(state.game_day).capitalize()
 
@@ -99,7 +100,52 @@ class Market(commands.Cog):
             )
 
         table = "```\n" + "\n".join(lines) + "\n```"
-        await ctx.send(embed=discordutil.embed(header, body + table))
+        emb = discordutil.embed(header, body + table)
+        if rounds:
+            emb.add_field(
+                name=f"{emojis.NUGGIE} Open rounds",
+                value="\n".join(
+                    f"**{r['ticker']}** — raising {formatting.fmt(r['amount'])} nug "
+                    f"for {r['equity_pct']:g}% · "
+                    f"{formatting.fmt(r['remaining'])} nug left · "
+                    f"`{ctx.prefix}invest {r['ticker']} <amount>`"
+                    for r in rounds[:10]
+                ),
+                inline=False,
+            )
+        await ctx.send(embed=emb)
+
+    async def _open_rounds(self, session, guild_id: int) -> list[dict]:
+        """Companies currently raising: ticker, target, equity %, remaining.
+
+        Read off the models directly — the investment service has no
+        "list open rounds" entry point and its signatures are owned elsewhere.
+        """
+        from sqlalchemy import select
+
+        from ..models import Company, FundingRound
+
+        rows = (
+            await session.execute(
+                select(FundingRound, Company)
+                .join(Company, FundingRound.company_id == Company.id)
+                .where(
+                    Company.guild_id == guild_id,
+                    Company.active == True,  # noqa: E712
+                    FundingRound.status == "open",
+                )
+                .order_by(Company.ticker.asc())
+            )
+        ).all()
+        return [
+            {
+                "ticker": company.ticker,
+                "amount": int(rnd.amount),
+                "equity_pct": float(rnd.equity_pct),
+                "remaining": max(0, int(rnd.amount) - int(rnd.amount_raised)),
+            }
+            for rnd, company in rows
+        ]
 
     # ------------------------------------------------------------ leaderboard
     @commands.command(name="leaderboard", aliases=["rich"])

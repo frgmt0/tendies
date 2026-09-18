@@ -18,7 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import lifecycle, lookups, money
 from .. import valuation as valuation_mod
-from ..config import DEFAULT_PRODUCTIVITY, SHARES_AT_FOUNDING, normalize_industry
+from ..config import (
+    DEFAULT_PRODUCTIVITY,
+    INDUSTRIES,
+    MAX_JOB_GRANT_FRACTION,
+    MIN_GRANT_VEST_DAYS,
+    SHARES_AT_FOUNDING,
+    normalize_industry,
+)
 from ..errors import BadInput, GameError, InsufficientFunds, NotAllowed, NotFound
 from ..formatting import fmt
 from ..models import (
@@ -76,8 +83,8 @@ async def found_company(
     industry_norm = normalize_industry(industry)
     if industry_norm is None:
         raise BadInput(
-            f"Unknown industry **{industry}**. Pick one of: food, materials, "
-            f"tech, medicine, energy, logistics, infrastructure, entertainment, finance."
+            f"Unknown industry **{industry}**. Pick one of: "
+            f"{', '.join(INDUSTRIES)}."
         )
 
     # Ticker must be unique per server, active or not.
@@ -254,6 +261,24 @@ async def post_job(
         raise BadInput("Vesting period must be a whole number of business days.")
     if equity_shares > 0 and vest_days <= 0:
         raise BadInput("An equity grant needs a positive vesting period (in business days).")
+    if equity_shares > 0:
+        # §10: a grant dilutes every existing shareholder, so one posting can
+        # only ever hand out a slice of the current cap table, and it has to
+        # vest over enough closes that investors can react.
+        max_grant = int(company.total_shares * MAX_JOB_GRANT_FRACTION)
+        if equity_shares > max_grant:
+            raise BadInput(
+                f"An equity grant can't exceed "
+                f"{MAX_JOB_GRANT_FRACTION:.0%} of **{company.ticker}**'s "
+                f"{fmt(company.total_shares)} shares — "
+                f"that's {fmt(max_grant)} shares, and you posted "
+                f"{fmt(equity_shares)}."
+            )
+        if vest_days < MIN_GRANT_VEST_DAYS:
+            raise BadInput(
+                f"An equity grant has to vest over at least "
+                f"{MIN_GRANT_VEST_DAYS} business days."
+            )
 
     stored_equity = equity_shares if equity_shares > 0 else None
     stored_vest = vest_days if equity_shares > 0 else None
@@ -383,6 +408,13 @@ async def hire(
         raise NotFound(f"Application #{application_id} isn't for **{company.ticker}**.")
     if not job.open:
         raise BadInput(f"The **{job.title}** role is closed.")
+
+    # An owner can't be their own employee (self-dealt grant + company-funded
+    # wage). Mirrored in ``employment.apply_to_job`` so neither path admits it.
+    if application.user_id == company.owner_id:
+        raise BadInput(
+            f"You own **{company.ticker}** — you can't hire yourself."
+        )
 
     # The applicant must be currently unemployed.
     existing = await lookups.get_employment(session, state.guild_id, application.user_id)

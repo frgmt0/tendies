@@ -157,6 +157,17 @@ async def invest(
     _require_business_day(state)
     _require_positive_int64(amount, "Investment amount")
 
+    # An owner can't buy into their own round: wallet -> treasury with shares
+    # minted back to themselves is a free anti-dilution lever over the outside
+    # investors in the same round. ``$deposit`` is the owner's funding path (§8).
+    owned = await lookups.get_company(session, state.guild_id, ticker)
+    if owned.owner_id == investor_id:
+        raise NotAllowed(
+            f"You own **{owned.ticker}** — fund it with "
+            f"`$deposit {owned.ticker} <amount>` instead of investing in your "
+            f"own round."
+        )
+
     # Accredited-investor gate (§11).
     trailing = await money.trailing_income(
         session, state.guild_id, investor_id, state.game_day, INCOME_WINDOW_DAYS
@@ -169,7 +180,7 @@ async def invest(
             f"Keep earning — or found your own."
         )
 
-    company = await lookups.get_company(session, state.guild_id, ticker)
+    company = owned
 
     round_ = (
         await session.execute(

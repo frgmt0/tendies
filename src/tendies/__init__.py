@@ -12,6 +12,9 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # apscheduler logs "Running job ... executed successfully" on every tick
+    # (every 60s in production), which drowns real signal in the journal.
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     from .bot import build_bot
 
     bot = build_bot()

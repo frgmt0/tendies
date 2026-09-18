@@ -12,7 +12,7 @@ setup = [
   "/home/jason/.local/bin/uv sync --frozen --no-dev",
 ]
 exclude = [".git", "*.db", "*.db-*", "*.db.lock", "*.sqlite3", ".backups/", ".DS_Store"]
-healthcheck = "i=0; while test $i -lt 30; do /usr/bin/python3 src/tendies/ops.py healthcheck && exit 0; i=$((i + 1)); sleep 2; done; exit 1"
+healthcheck = "i=0; while test $i -lt 45; do /usr/bin/python3 src/tendies/ops.py healthcheck && exit 0; i=$((i + 1)); sleep 2; done; exit 1"
 
 [env]
 DATABASE_URL = "sqlite+aiosqlite:////home/jason/.local/share/tendies/tendies.db"
